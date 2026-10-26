@@ -60,6 +60,8 @@ export default function AccessPage() {
       <button className="auth-primary" disabled={busy} onClick={() => startDerivAuth("login", setBusy, setError)}>{busy ? "Redirecting to Deriv…" : "Log in with Deriv"}<span>↗</span></button>
       <div className="auth-divider"><span>NEW TO DERIV?</span></div>
       <button className="auth-secondary" disabled={busy} onClick={() => startDerivAuth("signup", setBusy, setError)}>Create account through Deriv <span>↗</span></button>
+      <div className="auth-preview-divider"><span>OR EXPLORE FIRST</span></div>
+      <a className="auth-preview-link" href="/preview">Preview the Supa AI workspace <span>→</span></a>
       {error && <div className="auth-error" role="alert">{error}</div>}
       <p className="auth-footnote">By continuing, you will leave Supa AI and use Deriv's authentication service. Trading involves risk; past digit frequencies do not predict future outcomes.</p>
     </section>

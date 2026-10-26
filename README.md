@@ -59,3 +59,7 @@ This package preserves the Deriv access flow and the full workspace navigation, 
 - Glassmorphism visual styling across access, account selection, and workspace screens
 
 Strategy drafts in this starter are stored in browser local storage. The digit chart is illustrative until a live market-data service is connected. The current UI does not place real-money trades; do not enable real execution until server-side strategy validation, risk enforcement, trade reconciliation, and settlement handling have been implemented and tested.
+
+
+## Preview access
+The public `/preview` route allows visitors to explore the dashboard UI and strategy builder without completing Deriv authentication. It is preview-only: it does not grant access to account APIs or enable real trading. The normal `/workspace` route remains protected by the Deriv authorization cookie. This preview is intended for design evaluation while OAuth is being debugged.

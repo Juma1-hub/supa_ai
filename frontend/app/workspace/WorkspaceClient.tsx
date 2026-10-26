@@ -58,7 +58,7 @@ function readSavedStrategies(): Strategy[] {
   }
 }
 
-export default function Home() {
+export default function Home({ previewMode = false }: { previewMode?: boolean }) {
   const [page, setPage] = useState("dashboard");
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [draft, setDraft] = useState<Strategy>(initialStrategy);
@@ -152,17 +152,18 @@ export default function Home() {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="profile-row"><div className="avatar">SA</div><div><b>Supa AI Workspace</b><small>Deriv-authorized workspace</small></div><span className="more-dots">•••</span></div>
+          <div className="profile-row"><div className="avatar">SA</div><div><b>Supa AI Workspace</b><small>{previewMode ? "Preview only" : "Deriv-authorized workspace"}</small></div><span className="more-dots">•••</span></div>
         </div>
       </aside>
 
       <section className="main-area">
         <header className="topbar">
           <div className="breadcrumbs"><span>Workspace</span><span className="crumb-slash">/</span><b>{pageTitle}</b></div>
-          <div className="top-actions"><button className="secondary-button account-mode-button" onClick={() => window.location.assign("/account")}>Choose account ↗</button><button className="icon-button" aria-label="Notifications">♧</button><div className="avatar small">SA</div></div>
+          <div className="top-actions">{previewMode ? <button className="secondary-button account-mode-button" onClick={() => window.location.assign("/")}>Exit preview ↗</button> : <button className="secondary-button account-mode-button" onClick={() => window.location.assign("/account")}>Choose account ↗</button>}<button className="icon-button" aria-label="Notifications">♧</button><div className="avatar small">SA</div></div>
         </header>
 
         <div className="page-content">
+          {previewMode && <div className="notice-bar preview-access-banner"><span>◈</span><span><b>Preview mode</b> — explore the dashboard and Strategy Builder. No Deriv account is connected, and no trades can be placed.</span><button onClick={() => window.location.assign("/")} aria-label="Exit preview">×</button></div>}
           {notice && <div className="notice-bar"><span>ⓘ</span><span>{notice}</span><button onClick={() => setNotice("")} aria-label="Dismiss notice">×</button></div>}
 
           {page === "dashboard" && <>
