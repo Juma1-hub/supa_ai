@@ -46,3 +46,16 @@ The frontend now starts Deriv OAuth 2.0 Authorization Code with PKCE. Sign Up ad
 - Do not enable real-money automated trading yet. This update implements the sign-in path and account-choice screen, not the trading engine, persistent risk enforcement, contract reconciliation, or live order execution.
 - Access tokens currently live in a short-lived HTTP-only cookie (up to one hour). Refresh-token renewal and a durable server-side session store are not implemented yet. Users may need to sign in again after expiry.
 - Verify the actual OAuth scopes and account response shape against the Deriv application and current API docs during deployment testing.
+
+
+## Glassy integrated workspace
+
+This package preserves the Deriv access flow and the full workspace navigation, including:
+- Dashboard with a quick strategy-condition entry panel
+- Strategy Builder with AI-instruction and manual-condition modes
+- Rule review before saving
+- Market Monitor, Active Trades, Trade History, Risk Controls, and Settings navigation
+- Deriv OAuth callback and Demo/Real account selection
+- Glassmorphism visual styling across access, account selection, and workspace screens
+
+Strategy drafts in this starter are stored in browser local storage. The digit chart is illustrative until a live market-data service is connected. The current UI does not place real-money trades; do not enable real execution until server-side strategy validation, risk enforcement, trade reconciliation, and settlement handling have been implemented and tested.
