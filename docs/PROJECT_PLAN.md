@@ -1,32 +1,26 @@
-# Supa AI project plan
+# Supa AI Project Plan
 
-## Product focus
-- Deriv Volatility Indices supported by the official API.
-- Digit-based strategies, especially ODD and EVEN.
-- Configurable rolling digit-frequency windows and minimum sample size.
-- Natural-language instructions converted into explicit, reviewable rules.
-- Multiple independent strategies and strategy-specific market eligibility.
-- Shared account-level risk checks before purchases.
-- Open contracts monitored independently of active market assignment.
-- Durable state, audit logs, and careful recovery after disconnects or uncertain purchases.
+## Frontend prototype in this release
+- Dashboard with a compact strategy-entry panel.
+- Full Strategy Builder with natural-language and manual modes.
+- Rule-review modal and explicit user confirmation.
+- Strategy statuses and browser-local draft persistence.
+- Supabase endpoint reachability and optional backend health checks.
+- Non-live demo frequency visualization.
 
-## Development phases
-1. Dashboard and backend skeleton.
-2. Strategy schema, review, and validation.
-3. Simulated tick engine and automated tests.
-4. Deriv demo authorization and market-data integration after checking official documentation.
-5. Demo-only proposal/purchase/contract lifecycle integration.
-6. Recovery, monitoring, security, and load testing.
-7. Production review before any real-money capability.
+## Not yet implemented
+1. Official Deriv OAuth / authorization flow.
+2. Real-time Deriv tick subscriptions and quote-precision metadata.
+3. Server-side interpretation of natural-language instructions into a validated structured rule schema.
+4. Persistent Supabase authentication, per-user ownership, database writes, and audit logging.
+5. Dedicated persistent trading workers and durable state.
+6. Server-side risk limits, session P&L, martingale progression, and strategy eligibility enforcement.
+7. Contract purchase, settlement, open-contract reconciliation, and duplicate-order prevention.
+8. Comprehensive tests and demo-account validation.
 
-## Non-negotiable rules
-- Never silently change trader-defined thresholds, sequences, or market-switch rules.
-- Ask for clarification when an instruction is ambiguous or contradictory.
-- Ranking may choose only among markets that satisfy the strategy's own conditions.
-- Market switches must not reset martingale progression or loss history.
-- Existing contracts remain monitored after market invalidation.
-- Treat timed-out purchases as unknown until reconciled; never blindly retry.
-- Enforce shared risk limits before purchases.
-- Historical digit frequencies are observations, not predictions.
-- Martingale can increase exposure and losses; it does not improve underlying odds.
-- Frequency window and minimum sample size remain configurable; no default is assumed yet.
+## Safety requirements
+- Never collect Deriv account passwords.
+- Show parsed rules for explicit review and confirmation.
+- Do not silently alter user thresholds or sequence requirements.
+- Treat past digit frequencies as observations, not reliable predictions.
+- Keep real-money execution disabled until the complete system has been tested and the user explicitly authorizes it.

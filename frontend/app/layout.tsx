@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Supa AI",
-  description: "Deriv-focused digit strategy workspace",
+  title: "Supa AI — Trading Intelligence",
+  description: "Build and review Deriv trading strategies with Supa AI."
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
