@@ -29,3 +29,20 @@ Never place a Supabase service-role/secret key in a `NEXT_PUBLIC_` variable or f
 
 ## Deploy
 The Vercel Root Directory should remain `frontend`. Commit the project files to your existing GitHub repository and let Vercel deploy.
+
+
+## Deriv OAuth setup (required before sign-in can complete)
+
+The frontend now starts Deriv OAuth 2.0 Authorization Code with PKCE. Sign Up adds `prompt=registration` and your referral tracking parameter `t=UNHJX964Y5YX`. The callback exchanges the code server-side and stores the access token in an HTTP-only cookie; the token is not returned to browser JavaScript.
+
+1. In Deriv's developer dashboard, confirm the application is an **OAuth 2.0** application.
+2. Register this exact redirect URL (no trailing slash): `https://frontend-snowy-zeta-68.vercel.app/auth/deriv/callback`.
+3. In Vercel → Supa AI project → Settings → Environment Variables, add `NEXT_PUBLIC_DERIV_CLIENT_ID` and `DERIV_CLIENT_ID`, both set to your Deriv App ID. Add `DERIV_REDIRECT_URI` with the exact URL above. Add `DERIV_CLIENT_SECRET` only if Deriv's app settings/documentation require it; keep it server-only and never prefix it with `NEXT_PUBLIC_`.
+4. Redeploy the project after adding environment variables.
+5. Test Sign Up and Log In using a safe test flow first. Account selection calls Deriv's authorized accounts endpoint. No trading orders are placed by this login integration.
+
+### Important current limitations
+
+- Do not enable real-money automated trading yet. This update implements the sign-in path and account-choice screen, not the trading engine, persistent risk enforcement, contract reconciliation, or live order execution.
+- Access tokens currently live in a short-lived HTTP-only cookie (up to one hour). Refresh-token renewal and a durable server-side session store are not implemented yet. Users may need to sign in again after expiry.
+- Verify the actual OAuth scopes and account response shape against the Deriv application and current API docs during deployment testing.
