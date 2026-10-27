@@ -287,8 +287,7 @@ useEffect(() => {
       setMarketError("Connecting to Deriv market data…");
 
       try {
-        const appId = process.env.NEXT_PUBLIC_DERIV_APP_ID || "1089";
-        socket = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${encodeURIComponent(appId)}`);
+        socket = new WebSocket("wss://api.derivws.com/trading/v1/options/ws/public");
       } catch {
         setMarketStatus("error");
         setMarketError("Could not create the Deriv WebSocket connection.");
