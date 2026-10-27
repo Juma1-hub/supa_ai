@@ -75,29 +75,95 @@ export default function Home({ previewMode = false }: { previewMode?: boolean })
   const [notice, setNotice] = useState("");
   const [lastDigits] = useState([7, 3, 9, 1, 4, 7, 5, 3, 8, 1, 9, 5, 3, 7, 1, 5, 9, 3, 4, 7]);
 
- useEffect(() => {
+useEffect(() => {
   setStrategies(readSavedStrategies());
 
-  try {
-    const savedAccount = sessionStorage.getItem(
-      "supa_deriv_selected_account"
-    );
+  let cancelled = false;
+  let refreshing = false;
 
-    if (savedAccount) {
+  const loadSelectedAccount = () => {
+    try {
+      const savedAccount = sessionStorage.getItem(
+        "supa_deriv_selected_account"
+      );
+
+      if (!savedAccount) {
+        setSelectedAccount(null);
+        return;
+      }
+
       const account = JSON.parse(savedAccount);
 
       if (
         account &&
         typeof account === "object" &&
+        typeof account.accountId === "string" &&
         typeof account.isVirtual === "boolean"
       ) {
         setSelectedAccount(account as SelectedDerivAccount);
       }
+    } catch {
+      setSelectedAccount(null);
     }
-  } catch {
-    setSelectedAccount(null);
-  }
+  };
+
+  const refreshBalance = async () => {
+    if (cancelled || refreshing) return;
+
+    refreshing = true;
+
+    try {
+      const response = await fetch("/api/auth/deriv/accounts", {
+        cache: "no-store",
+      });
+
+      if (!response.ok) return;
+
+      const data = await response.json();
+
+      if (!Array.isArray(data.accounts) || cancelled) return;
+
+      const savedAccount = sessionStorage.getItem(
+        "supa_deriv_selected_account"
+      );
+
+      if (!savedAccount) return;
+
+      const selected = JSON.parse(savedAccount);
+
+      const latestAccount = data.accounts.find(
+        (account: SelectedDerivAccount) =>
+          account.accountId === selected.accountId
+      );
+
+      if (!latestAccount || cancelled) return;
+
+      setSelectedAccount(latestAccount);
+
+      sessionStorage.setItem(
+        "supa_deriv_selected_account",
+        JSON.stringify(latestAccount)
+      );
+    } catch {
+      // Keep the last known balance if a refresh temporarily fails.
+    } finally {
+      refreshing = false;
+    }
+  };
+
+  loadSelectedAccount();
+  void refreshBalance();
+
+  const intervalId = window.setInterval(() => {
+    void refreshBalance();
+  }, 15000);
+
+  return () => {
+    cancelled = true;
+    window.clearInterval(intervalId);
+  };
 }, []);
+
   const frequencies = useMemo(() => {
     const counts = Array(10).fill(0) as number[];
     lastDigits.forEach((d) => counts[d]++);
