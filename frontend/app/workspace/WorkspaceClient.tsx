@@ -235,14 +235,22 @@ useEffect(() => {
           <div className="brand-mark">S<span>+</span></div>
           <div><div className="brand-name">supa<span>ai</span></div><div className="brand-subtitle">TRADING INTELLIGENCE</div></div>
         </div>
-        <div className="workspace-label">WORKSPACE</div>
-        <nav className="side-nav" aria-label="Main navigation">
-          {navItems.map((item) => (
-            <button key={item.id} className={`nav-item ${page === item.id ? "active" : ""}`} onClick={() => setPage(item.id)}>
-              <span className="nav-icon">{item.icon}</span><span>{item.label}</span>
-              {item.id === "builder" && <span className="nav-new">NEW</span>}
-            </button>
-          ))}
+       <button
+  type="button"
+  className="workspace-label"
+  onClick={() => setPage("dashboard")}
+  style={{
+    display: "block",
+    width: "100%",
+    border: "none",
+    background: "transparent",
+    textAlign: "left",
+    cursor: "pointer",
+    font: "inherit",
+  }}
+>
+  WORKSPACE
+</button>
         </nav>
         <div className="sidebar-bottom">
           <div className="profile-row"><div className="avatar">SA</div><div><b>Supa AI Workspace</b><small>{previewMode ? "Preview only" : "Deriv-authorized workspace"}</small></div><span className="more-dots">•••</span></div>
