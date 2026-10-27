@@ -34,6 +34,19 @@ export default function AccountChoicePage() {
       ? `${account.currency || ""} ${Number(account.balance).toFixed(2)}`
       : "Unavailable"}
   </small>
+</span>
+
+  <b>{account.isVirtual ? "Demo Account" : "Real Account"}</b>
+  <small>
+    {account.accountId || String(account.accountType)}
+    {account.currency ? ` · ${account.currency}` : ""}
+  </small>
+  <small>
+    Balance:{" "}
+    {account.balance !== null && account.balance !== undefined
+      ? `${account.currency || ""} ${Number(account.balance).toFixed(2)}`
+      : "Unavailable"}
+  </small>
 </span><span className="account-option-arrow">→</span></button>)}</div>}
     <p className="auth-footnote">Choosing an account does not start trading. Real-money trading remains unavailable until trading safeguards and order handling are implemented and tested.</p>
   </section></main>;
