@@ -73,7 +73,17 @@ export default function Home({ previewMode = false }: { previewMode?: boolean })
   const [mode, setMode] = useState<"ai" | "manual">("ai");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [notice, setNotice] = useState("");
-  const [lastDigits] = useState([7, 3, 9, 1, 4, 7, 5, 3, 8, 1, 9, 5, 3, 7, 1, 5, 9, 3, 4, 7]);
+  const [marketSymbol, setMarketSymbol] = useState("R_100");
+  const [marketTicks, setMarketTicks] = useState<Array<{ quote: string; digit: number; epoch: number }>>([]);
+  const [marketStatus, setMarketStatus] = useState<"connecting" | "live" | "disconnected" | "error">("connecting");
+  const [marketError, setMarketError] = useState("");
+  const marketNames: Record<string, string> = {
+    R_100: "Volatility 100 Index",
+    R_75: "Volatility 75 Index",
+    R_50: "Volatility 50 Index",
+    R_25: "Volatility 25 Index",
+    R_10: "Volatility 10 Index",
+  };
 
 useEffect(() => {
   setStrategies(readSavedStrategies());
@@ -164,12 +174,86 @@ useEffect(() => {
   };
 }, []);
 
+  useEffect(() => {
+    // Public market data only: this socket does not authorize or place trades.
+    const appId =
+      process.env.NEXT_PUBLIC_DERIV_APP_ID ||
+      process.env.NEXT_PUBLIC_DERIV_CLIENT_ID ||
+      "1089";
+    let socket: WebSocket | null = null;
+    let reconnectTimer: number | undefined;
+    let stopped = false;
+
+    const connect = () => {
+      if (stopped) return;
+      setMarketStatus("connecting");
+      setMarketError("");
+      try {
+        socket = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${encodeURIComponent(appId)}`);
+        socket.onopen = () => {
+          if (stopped || !socket) return;
+          socket.send(JSON.stringify({ ticks: marketSymbol, subscribe: 1 }));
+        };
+        socket.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data);
+            if (message.error) {
+              setMarketError(message.error.message || "Deriv returned a market-data error.");
+              setMarketStatus("error");
+              return;
+            }
+            if (message.msg_type === "tick" && message.tick) {
+              const tick = message.tick;
+              const quote = String(tick.quote);
+              const decimals = quote.includes(".") ? quote.split(".")[1].length : 0;
+              const digit = decimals > 0
+                ? Number(quote.replace(".", "").slice(-1))
+                : Number(quote.slice(-1));
+              if (!Number.isInteger(digit) || digit < 0 || digit > 9) return;
+              setMarketTicks((previous) => [
+                ...previous,
+                { quote, digit, epoch: Number(tick.epoch) || Math.floor(Date.now() / 1000) },
+              ].slice(-100));
+              setMarketStatus("live");
+            }
+          } catch {
+            setMarketError("Could not read a market-data message.");
+          }
+        };
+        socket.onerror = () => {
+          setMarketStatus("error");
+          setMarketError("Market connection failed. Check the Deriv app ID and try again.");
+        };
+        socket.onclose = () => {
+          if (stopped) return;
+          setMarketStatus("disconnected");
+          reconnectTimer = window.setTimeout(connect, 3000);
+        };
+      } catch {
+        setMarketStatus("error");
+        setMarketError("This browser could not start the market connection.");
+      }
+    };
+
+    setMarketTicks([]);
+    connect();
+    return () => {
+      stopped = true;
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      if (socket) {
+        socket.onclose = null;
+        try { socket.close(); } catch {}
+      }
+    };
+  }, [marketSymbol]);
+
   const frequencies = useMemo(() => {
     const counts = Array(10).fill(0) as number[];
-    lastDigits.forEach((d) => counts[d]++);
-    return counts.map((count, digit) => ({ digit, count, percent: (count / lastDigits.length) * 100 }))
+    marketTicks.forEach((tick) => counts[tick.digit]++);
+    const total = marketTicks.length;
+    return counts.map((count, digit) => ({ digit, count, percent: total ? (count / total) * 100 : 0 }))
       .sort((a, b) => a.digit - b.digit);
-  }, [lastDigits]);
+  }, [marketTicks]);
 
   function updateDraft<K extends keyof Strategy>(key: K, value: Strategy[K]) {
     setDraft((old) => ({ ...old, [key]: value }));
@@ -393,7 +477,7 @@ useEffect(() => {
                 {strategies.length === 0 ? <div className="empty-state"><div className="empty-icon">⌘</div><b>No saved strategies yet</b><p>Create a strategy above to get started.</p><button className="secondary-button" onClick={() => setPage("builder")}>Build your first strategy</button></div> : <div className="strategy-list">{strategies.map(s => <div className="strategy-row" key={s.id}><div className="strategy-symbol">{s.contract === "ODD" ? "◐" : "◑"}</div><div className="strategy-info"><b>{s.name}</b><small>{s.market} · {s.contract}</small></div><span className={`strategy-status ${s.status.toLowerCase().replace(" ","-")}`}>{s.status}</span><button className="row-action" onClick={() => editStrategy(s)}>Edit</button><button className="row-action" onClick={() => togglePause(s)}>{s.status === "Paused" ? "Resume" : "Pause"}</button></div>)}</div>}
               </section>
               <section className="panel market-card">
-                <div className="panel-heading"><div><h2>Digit frequency snapshot</h2><p>Illustrative digit-frequency snapshot</p></div><span className="live-tag"><span className="status-dot amber"/> SAMPLE</span></div>
+                <div className="panel-heading"><div><h2>Digit frequency snapshot</h2><p>{marketNames[marketSymbol]} · {marketTicks.length} recent ticks</p></div><span className="live-tag"><span className={`status-dot ${marketStatus === "live" ? "" : "amber"}`}/> {marketStatus === "live" ? "LIVE" : marketStatus.toUpperCase()}</span></div>
                 <div className="frequency-bars">{frequencies.map(f => <div className="frequency-item" key={f.digit}><div className="frequency-value">{f.percent.toFixed(0)}%</div><div className="frequency-track"><div className={`frequency-fill ${f.digit % 2 ? "odd-fill" : ""}`} style={{height:`${Math.max(5,f.percent*2.5)}%`}}/></div><div className="frequency-digit">{f.digit}</div></div>)}</div>
                 <div className="chart-footnote"><span><i className="legend-dot" /> Even digits</span><span><i className="legend-dot odd" /> Odd digits</span><button className="text-button" onClick={() => setPage("markets")}>Market monitor ↗</button></div>
               </section>
@@ -420,7 +504,23 @@ useEffect(() => {
             </div>
           </section>}
 
-          {page === "markets" && <PlaceholderPage title="Market Monitor" description="Review market conditions and digit-frequency information." icon="⌁"/>}
+          {page === "markets" && <section>
+            <div className="page-heading-row"><div><div className="eyebrow">LIVE MARKET DATA</div><h1>Market Monitor</h1><p className="subtitle">Public Deriv ticks and digit frequencies. No trading actions are enabled here.</p></div>
+              <label className="field-label">MARKET
+                <select value={marketSymbol} onChange={(e) => setMarketSymbol(e.target.value)}>
+                  <option value="R_100">Volatility 100 Index</option><option value="R_75">Volatility 75 Index</option><option value="R_50">Volatility 50 Index</option><option value="R_25">Volatility 25 Index</option><option value="R_10">Volatility 10 Index</option>
+                </select>
+              </label>
+            </div>
+            <section className="panel market-card">
+              <div className="panel-heading"><div><h2>{marketNames[marketSymbol]}</h2><p>Last price: {marketTicks.length ? marketTicks[marketTicks.length - 1].quote : "Waiting for first tick…"}</p></div><span className="live-tag"><span className={`status-dot ${marketStatus === "live" ? "" : "amber"}`}/>{marketStatus.toUpperCase()}</span></div>
+              {marketError && <div className="notice-bar"><span>ⓘ</span><span>{marketError}</span></div>}
+              <p className="subtitle">Digits received: {marketTicks.length} / 100 · Frequencies use only the ticks received in this browser session.</p>
+              <div className="frequency-bars">{frequencies.map(f => <div className="frequency-item" key={f.digit}><div className="frequency-value">{f.percent.toFixed(1)}%</div><div className="frequency-track"><div className={`frequency-fill ${f.digit % 2 ? "odd-fill" : ""}`} style={{height:`${Math.max(5,f.percent*2.5)}%`}}/></div><div className="frequency-digit">{f.digit}</div><small>{f.count}</small></div>)}</div>
+              <h3>Recent ticks</h3>
+              <div style={{display:"flex",flexWrap:"wrap",gap:"8px"}}>{marketTicks.slice(-20).reverse().map((tick,index)=><span key={`${tick.epoch}-${index}`} title={new Date(tick.epoch*1000).toLocaleTimeString()} style={{padding:"6px 9px",borderRadius:"8px",background:tick.digit%2 ? "rgba(54,201,149,.14)" : "rgba(217,164,65,.14)"}}>{tick.digit}</span>)}</div>
+            </section>
+          </section>}
           {page === "trades" && <PlaceholderPage title="Active Trades" description="View your open contracts and their current status." icon="↗"/>}
           {page === "history" && <PlaceholderPage title="Trade History" description="Review settled contracts and past outcomes." icon="◷"/>}
           {page === "risk" && <PlaceholderPage title="Risk Controls" description="Review your stake, progression, and session risk limits." icon="◇" action="Open Strategy Builder" onAction={() => setPage("builder")}/>}
