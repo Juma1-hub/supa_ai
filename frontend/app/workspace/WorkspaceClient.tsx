@@ -251,6 +251,19 @@ useEffect(() => {
 >
   WORKSPACE
 </button>
+        <nav className="side-nav" aria-label="Main navigation">
+          {navItems.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`nav-item ${page === item.id ? "active" : ""}`}
+              onClick={() => setPage(item.id)}
+            >
+              <span className="nav-icon">{item.icon}</span>
+              <span>{item.label}</span>
+              {item.id === "builder" && <span className="nav-new">NEW</span>}
+            </button>
+          ))}
         </nav>
         <div className="sidebar-bottom">
           <div className="profile-row"><div className="avatar">SA</div><div><b>Supa AI Workspace</b><small>{previewMode ? "Preview only" : "Deriv-authorized workspace"}</small></div><span className="more-dots">•••</span></div>
@@ -282,7 +295,7 @@ useEffect(() => {
         {selectedAccount.isVirtual ? "DEMO ACCOUNT" : "REAL ACCOUNT"}
       </span>
 
-      <strong style={{ fontSize: "16px" }}>
+      <strong style={{ fontSize: "13px", lineHeight: 1.2 }}>
         {selectedAccount.balance !== null &&
         selectedAccount.balance !== "" &&
         Number.isFinite(Number(selectedAccount.balance))
