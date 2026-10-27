@@ -22,7 +22,19 @@ export default function AccountChoicePage() {
     {loading && <p className="account-state">Loading your Deriv accounts…</p>}
     {error && <div className="auth-error">{error}<p>Confirm that your OAuth app has the required permissions, then try signing in again.</p><a href="/" className="text-button">Back to sign in</a></div>}
     {!loading && !error && accounts.length === 0 && <div className="account-state">Deriv did not return any selectable accounts for this authorization. Please sign in again or check your application's permissions.</div>}
-    {!loading && !error && accounts.length > 0 && <div className="account-options">{accounts.map((account, i) => <button className="account-option" key={`${account.accountId}-${i}`} onClick={() => choose(account)}><span className={`account-option-icon ${account.isVirtual ? "demo" : "real"}`}>{account.isVirtual ? "D" : "R"}</span><span className="account-option-copy"><b>{account.isVirtual ? "Demo Account" : "Real Account"}</b><small>{account.accountId || String(account.accountType)}{account.currency ? ` · ${account.currency}` : ""}</small></span><span className="account-option-arrow">→</span></button>)}</div>}
+    {!loading && !error && accounts.length > 0 && <div className="account-options">{accounts.map((account, i) => <button className="account-option" key={`${account.accountId}-${i}`} onClick={() => choose(account)}><span className={`account-option-icon ${account.isVirtual ? "demo" : "real"}`}>{account.isVirtual ? "D" : "R"}</span><span className="account-option-copy">
+  <b>{account.isVirtual ? "Demo Account" : "Real Account"}</b>
+  <small>
+    {account.accountId || String(account.accountType)}
+    {account.currency ? ` · ${account.currency}` : ""}
+  </small>
+  <small>
+    Balance:{" "}
+    {account.balance !== null && account.balance !== undefined
+      ? `${account.currency || ""} ${Number(account.balance).toFixed(2)}`
+      : "Unavailable"}
+  </small>
+</span><span className="account-option-arrow">→</span></button>)}</div>}
     <p className="auth-footnote">Choosing an account does not start trading. Real-money trading remains unavailable until trading safeguards and order handling are implemented and tested.</p>
   </section></main>;
 }
