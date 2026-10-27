@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 type SelectedDerivAccount = {
   accountId: string;
   accountType: string;
@@ -83,7 +83,21 @@ export default function Home({ previewMode = false }: { previewMode?: boolean })
   const [mode, setMode] = useState<"ai" | "manual">("ai");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [notice, setNotice] = useState("");
-  const [lastDigits] = useState([7, 3, 9, 1, 4, 7, 5, 3, 8, 1, 9, 5, 3, 7, 1, 5, 9, 3, 4, 7]);
+  const [marketSymbol, setMarketSymbol] = useState("R_100");
+  const [marketTicks, setMarketTicks] = useState<Array<{quote:number; digit:number; epoch:number}>>([]);
+  const [marketStatus, setMarketStatus] = useState<"connecting"|"live"|"error">("connecting");
+  const [marketError, setMarketError] = useState("");
+  const [sessionTickCount, setSessionTickCount] = useState(0);
+  const tickKeysRef = useRef<Set<string>>(new Set());
+  const marketSymbols = [
+    {value:"R_10",label:"Volatility 10 Index"},{value:"R_25",label:"Volatility 25 Index"},
+    {value:"R_50",label:"Volatility 50 Index"},{value:"R_75",label:"Volatility 75 Index"},
+    {value:"R_100",label:"Volatility 100 Index"},{value:"1HZ10V",label:"Volatility 10 (1s) Index"},
+    {value:"1HZ25V",label:"Volatility 25 (1s) Index"},{value:"1HZ50V",label:"Volatility 50 (1s) Index"},
+    {value:"1HZ75V",label:"Volatility 75 (1s) Index"},{value:"1HZ100V",label:"Volatility 100 (1s) Index"},
+    {value:"JD10",label:"Jump 10 Index"},{value:"JD25",label:"Jump 25 Index"},
+    {value:"JD50",label:"Jump 50 Index"},{value:"JD75",label:"Jump 75 Index"},{value:"JD100",label:"Jump 100 Index"}
+  ];
   const [virtualHook, setVirtualHook] = useState(false);
   const [offlineEnabled, setOfflineEnabled] = useState(false);
   const [botRunning, setBotRunning] = useState(false);
@@ -203,12 +217,112 @@ useEffect(() => {
   };
 }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    let socket: WebSocket | null = null;
+    let reconnectTimer: number | undefined;
+    let reconnectAttempts = 0;
+    let subscribed = false;
+
+    const parseQuote = (quote: unknown, pipSize: unknown) => {
+      const value = Number(quote);
+      if (!Number.isFinite(value)) return null;
+      const decimals = Number.isInteger(Number(pipSize)) ? Math.min(10, Math.max(0, Number(pipSize))) : 2;
+      const digits = value.toFixed(decimals).replace(/\D/g, "");
+      return digits ? {quote:value, digit:Number(digits.slice(-1))} : null;
+    };
+    const appendTicks = (items: Array<{quote:number;digit:number;epoch:number}>, live:boolean) => {
+      const fresh = items.filter(item => {
+        const key = `${item.epoch}:${item.quote}`;
+        if (tickKeysRef.current.has(key)) return false;
+        tickKeysRef.current.add(key);
+        return true;
+      });
+      if (!fresh.length || cancelled) return;
+      setMarketTicks(old => [...old, ...fresh].slice(-1000));
+      if (live) setSessionTickCount(old => {
+        const next = old + fresh.length;
+        try { localStorage.setItem("supa-ai-session-tick-count", String(next)); } catch {}
+        return next;
+      });
+    };
+    const scheduleReconnect = () => {
+      if (!cancelled) reconnectTimer = window.setTimeout(connect, Math.min(15000, 1500 * ++reconnectAttempts));
+    };
+    const connect = () => {
+      if (cancelled) return;
+      setMarketStatus("connecting"); setMarketError(""); subscribed = false;
+      try { socket = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089"); }
+      catch { setMarketStatus("error"); setMarketError("Could not open the Deriv market-data connection."); scheduleReconnect(); return; }
+      socket.onopen = () => {
+        if (!cancelled) socket?.send(JSON.stringify({ticks_history:marketSymbol,count:1000,end:"latest",style:"ticks",req_id:1}));
+      };
+      socket.onmessage = event => {
+        if (cancelled) return;
+        let message: any;
+        try { message = JSON.parse(event.data); } catch { return; }
+        if (message.error) {
+          setMarketStatus("error");
+          setMarketError(String(message.error.message || "Deriv returned a market-data error."));
+          return;
+        }
+        if (message.msg_type === "history" && message.history) {
+          const prices: unknown[] = Array.isArray(message.history.prices) ? message.history.prices : [];
+          const times: unknown[] = Array.isArray(message.history.times) ? message.history.times : [];
+          const pipSize = message.pip_size ?? 2;
+          const history = prices.map((price,i) => {
+            const parsed = parseQuote(price,pipSize);
+            return parsed ? {...parsed,epoch:Number(times[i]||0)} : null;
+          }).filter((item): item is {quote:number;digit:number;epoch:number} => item !== null && Number.isFinite(item.epoch));
+          tickKeysRef.current.clear(); setMarketTicks([]);
+          appendTicks(history,false);
+          if (!subscribed && socket?.readyState === WebSocket.OPEN) {
+            subscribed = true;
+            socket.send(JSON.stringify({ticks:marketSymbol,subscribe:1,req_id:2}));
+          }
+          setMarketStatus("live"); return;
+        }
+        if (message.msg_type === "tick" && message.tick) {
+          const parsed = parseQuote(message.tick.quote, message.pip_size ?? message.tick.pip_size);
+          if (!parsed) return;
+          appendTicks([{...parsed,epoch:Number(message.tick.epoch||Math.floor(Date.now()/1000))}],true);
+          setMarketStatus("live");
+        }
+      };
+      socket.onerror = () => {
+        if (!cancelled) { setMarketStatus("error"); setMarketError("Market stream interrupted; reconnecting automatically."); }
+      };
+      socket.onclose = () => { if (!cancelled) { setMarketStatus("connecting"); scheduleReconnect(); } };
+    };
+    try {
+      const saved = Number(localStorage.getItem("supa-ai-session-tick-count") || "0");
+      if (Number.isFinite(saved) && saved >= 0) setSessionTickCount(saved);
+    } catch {}
+    connect();
+    return () => {
+      cancelled = true;
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      if (socket) { socket.onopen=null; socket.onmessage=null; socket.onerror=null; socket.onclose=null; socket.close(); }
+    };
+  }, [marketSymbol]);
+
   const frequencies = useMemo(() => {
     const counts = Array(10).fill(0) as number[];
-    lastDigits.forEach((d) => counts[d]++);
-    return counts.map((count, digit) => ({ digit, count, percent: (count / lastDigits.length) * 100 }))
-      .sort((a, b) => a.digit - b.digit);
-  }, [lastDigits]);
+    marketTicks.forEach(t => { if (t.digit >= 0 && t.digit <= 9) counts[t.digit]++; });
+    const total = marketTicks.length;
+    return counts.map((count,digit)=>({digit,count,percent:total ? count/total*100 : 0}));
+  }, [marketTicks]);
+
+  const digitColors = useMemo(() => {
+    const ranked = [...frequencies].sort((a,b)=>b.count-a.count||a.digit-b.digit);
+    const colors: Record<number,string> = {};
+    if (ranked[0]?.count>0) colors[ranked[0].digit]="#20b981";
+    if (ranked[1]?.count>0) colors[ranked[1].digit]="#3987ff";
+    const low = [...ranked].filter(x=>x.count>0).sort((a,b)=>a.count-b.count||a.digit-b.digit);
+    if (low[0]) colors[low[0].digit]="#ef5350";
+    if (low[1]) colors[low[1].digit]="#f59e0b";
+    return colors;
+  }, [frequencies]);
 
   function updateDraft<K extends keyof Strategy>(key: K, value: Strategy[K]) {
     setDraft((old) => ({ ...old, [key]: value }));
@@ -419,7 +533,18 @@ useEffect(() => {
             </div>
           </section>}
 
-          {page === "markets" && <section><div className="page-heading-row"><div><div className="eyebrow">LIVE MARKET WORKSPACE</div><h1>Market Monitor</h1><p className="subtitle">Scan eligible digit markets and review rolling 1,000-tick analysis. Live analysis wiring remains in the existing market connection.</p></div><span className="draft-pill">1,000-TICK WINDOW</span></div><div className="panel" style={{padding:20,marginBottom:16}}><h2>Market scan status</h2><p>Market discovery, historical tick loading, and per-market live buffers will be connected to the Deriv feed in the next implementation stage.</p><div className="metrics-grid"><Metric label="ANALYSIS WINDOW" value="1,000" foot="Ticks per market" icon="⌁"/><Metric label="MARKETS FOUND" value="—" foot="Awaiting scanner integration" icon="▦"/><Metric label="QUALIFIED MARKETS" value="—" foot="No qualification claimed yet" icon="✓"/><Metric label="SCANNER STATUS" value="UI READY" foot="Backend/stream integration pending" icon="◷"/></div></div><div className="panel" style={{padding:20}}><h2>Digit ranking legend</h2><p>Shared ranking colours will be used by Market Monitor and the floating digit tool.</p><div style={{display:"flex",gap:12,flexWrap:"wrap"}}>{[["Highest frequency","#20b981"],["Second highest","#3987ff"],["Lowest frequency","#ef5350"],["Second lowest","#f59e0b"]].map(([label,color])=><span key={label} style={{padding:"8px 12px",borderRadius:9,background:`${color}18`,color, fontWeight:700}}>{label}</span>)}</div></div></section>}
+          {page === "markets" && <section>
+            <div className="page-heading-row"><div><div className="eyebrow">LIVE MARKET WORKSPACE</div><h1>Market Monitor</h1><p className="subtitle">Live digit-frequency analysis using up to the latest 1,000 ticks.</p></div><span className="draft-pill">{marketStatus.toUpperCase()}</span></div>
+            <div className="panel market-monitor-panel">
+              <div className="market-controls"><label>Market<select value={marketSymbol} onChange={e=>{tickKeysRef.current.clear();setMarketTicks([]);setMarketSymbol(e.target.value);}}>{marketSymbols.map(item=><option key={item.value} value={item.value}>{item.label}</option>)}</select></label><div className="tick-stat"><small>TICKS IN WINDOW</small><strong>{marketTicks.length} / 1,000</strong></div><div className="tick-stat"><small>SESSION TICK COUNT</small><strong>{sessionTickCount.toLocaleString()}</strong></div><div className="tick-stat"><small>LATEST QUOTE</small><strong>{marketTicks.length?marketTicks[marketTicks.length-1].quote:"—"}</strong></div></div>
+              {marketError && <div className="market-error">{marketError}</div>}
+              <div className="digit-grid">{frequencies.map(f=><div className="digit-card" key={f.digit} style={{borderColor:digitColors[f.digit]||"#dfe5ee"}}><div className="digit-card-top"><span>Digit</span><b style={{color:digitColors[f.digit]||"inherit"}}>{f.digit}</b></div><strong>{f.percent.toFixed(2)}%</strong><small>{f.count} ticks</small><div className="digit-progress"><span style={{width:`${f.percent}%`,background:digitColors[f.digit]||"#8b95a7"}}/></div></div>)}</div>
+              <div className="panel-heading"><div><h2>Recent ticks</h2><p>Newest first · only real received tick data is shown.</p></div></div>
+              <div className="recent-ticks">{[...marketTicks].slice(-30).reverse().map((tick,i)=><div className="recent-tick" key={`${tick.epoch}-${tick.quote}-${i}`}><small>{new Date(tick.epoch*1000).toLocaleTimeString()}</small><strong>{tick.quote}</strong><span style={{background:digitColors[tick.digit]||"#8b95a7"}}>{tick.digit}</span></div>)}</div>
+              {!marketTicks.length && <div className="empty-state"><b>Waiting for Deriv ticks…</b><p>Keep the dashboard open while the public market stream connects.</p></div>}
+            </div>
+            <div className="panel" style={{padding:20,marginTop:16}}><h2>Digit ranking legend</h2><div style={{display:"flex",gap:12,flexWrap:"wrap"}}>{[["Highest frequency","#20b981"],["Second highest","#3987ff"],["Lowest frequency","#ef5350"],["Second lowest","#f59e0b"]].map(([label,color])=><span key={label} style={{padding:"8px 12px",borderRadius:9,background:`${color}18`,color,fontWeight:700}}>{label}</span>)}</div></div>
+          </section>}
           {page === "trades" && <section><div className="page-heading-row"><div><div className="eyebrow">EXECUTION MONITOR</div><h1>Active Trades</h1><p className="subtitle">Open contracts will appear here after secure execution and contract reconciliation are connected.</p></div><span className="draft-pill">REAL TRADING LOCKED</span></div><div className="panel" style={{padding:20}}><h2>Contract monitor</h2><p>No live contracts are being reported by this frontend-only panel. The UI does not place trades.</p><div style={{overflowX:"auto"}}><table style={{width:"100%",textAlign:"left",borderCollapse:"collapse"}}><thead><tr>{["Time","Market","Contract","Stake","Status","P/L"].map(x=><th key={x} style={{padding:12,borderBottom:"1px solid #26313e"}}>{x}</th>)}</tr></thead><tbody><tr><td colSpan={6} style={{padding:18,opacity:.7}}>No contracts available yet.</td></tr></tbody></table></div></div></section>}
           {page === "history" && <section><div className="page-heading-row"><div><div className="eyebrow">CONTRACT RECORDS</div><h1>Trade History</h1><p className="subtitle">Settled real contracts and simulated virtual trades will be clearly separated.</p></div></div><div className="panel" style={{padding:20}}><h2>History status</h2><p>Broker-confirmed history will be loaded from the backend. Browser-only UI events are not presented as real contracts.</p></div></section>}
           {page === "risk" && <section><div className="page-heading-row"><div><div className="eyebrow">ACCOUNT PROTECTION</div><h1>Risk Controls</h1><p className="subtitle">Configure strategy-level limits in Strategy Builder. These frontend settings do not yet enforce broker-side controls.</p></div></div><div className="panel" style={{padding:20}}><div className="form-grid"><label>Current strategy initial stake<input readOnly value={draft.stake}/></label><label>Take profit<input readOnly value={draft.takeProfit}/></label><label>Stop loss<input readOnly value={draft.stopLoss}/></label><label>Maximum stake<input readOnly value={draft.maxStake}/></label><label>Max martingale steps<input readOnly value={draft.maxMartingaleSteps}/></label><label>Max concurrent trades<input readOnly value={draft.maxTrades}/></label></div><button className="primary-button" onClick={() => setPage("builder")}>Edit risk settings →</button></div></section>}
@@ -430,12 +555,27 @@ useEffect(() => {
           {page === "settings" && <section><div className="page-heading-row"><div><div className="eyebrow">WORKSPACE</div><h1>Settings & connections</h1><p className="subtitle">Manage your account connection and trading preferences.</p></div></div><div className="settings-grid"><div className="panel setting-card"><div className="setting-title"><span className="setting-logo deriv-logo">D</span><div><h2>Deriv account</h2><p>Secure account authorization</p></div></div><p className="setting-description">Connect through Deriv's official authorization process. Supa AI will never ask for your Deriv password.</p><button className="primary-button" onClick={() => window.location.assign("/account")}>Choose account ↗</button></div></div></section>}
 
 
-          {floatingDigitsOpen && <aside className="panel" style={{position:"fixed",right:24,bottom:24,zIndex:50,width:320,maxWidth:"calc(100vw - 32px)",padding:18,boxShadow:"0 16px 48px #0008"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><h3 style={{margin:0}}>Floating digit analysis</h3><button className="icon-button" onClick={()=>setFloatingDigitsOpen(false)} aria-label="Close floating digit tool">×</button></div><p style={{fontSize:12,opacity:.7}}>Sample data until the live 1,000-tick feed is connected.</p><div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:6}}>{frequencies.map(f=><div key={f.digit} style={{padding:"8px 4px",textAlign:"center",borderRadius:8,background:"#202b38"}}><b>{f.digit}</b><div style={{fontSize:11}}>{f.percent.toFixed(0)}%</div></div>)}</div><p style={{fontSize:11,opacity:.7,marginBottom:0}}>Ranking colours will match Market Monitor when live market analysis is integrated.</p></aside>}
+          {floatingDigitsOpen && <aside className="panel" style={{position:"fixed",right:24,bottom:24,zIndex:50,width:320,maxWidth:"calc(100vw - 32px)",padding:18,boxShadow:"0 16px 48px #0008"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><h3 style={{margin:0}}>Floating digit analysis</h3><button className="icon-button" onClick={()=>setFloatingDigitsOpen(false)} aria-label="Close floating digit tool">×</button></div><p style={{fontSize:12,opacity:.7}}>Live data from the selected market; the latest 1,000 ticks are analysed.</p><div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:6}}>{frequencies.map(f=><div key={f.digit} style={{padding:"8px 4px",textAlign:"center",borderRadius:8,background:`${digitColors[f.digit] || "#202b38"}22`,border:`1px solid ${digitColors[f.digit] || "#394657"}`,color:digitColors[f.digit] || "inherit"}}><b>{f.digit}</b><div style={{fontSize:11}}>{f.percent.toFixed(0)}%</div></div>)}</div><p style={{fontSize:11,opacity:.7,marginBottom:0}}>Green/blue mark the highest frequencies; red/orange mark the lowest frequencies.</p></aside>}
 
           {reviewOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setReviewOpen(false); }}><section className="review-modal panel" role="dialog" aria-modal="true" aria-labelledby="review-title"><div className="modal-heading"><div><div className="eyebrow">CONFIRMATION REQUIRED</div><h2 id="review-title">Review strategy rules</h2><p>Check every rule before saving. Nothing will be traded.</p></div><button className="icon-button" onClick={() => setReviewOpen(false)} aria-label="Close review">×</button></div><div className="review-warning"><span>!</span><p><b>Demo interface only.</b> The instruction parser is a simple heuristic, not a full AI model. Verify all rules manually.</p></div><div className="review-summary"><div><small>STRATEGY</small><b>{draft.name || "Untitled strategy"}</b></div><div><small>MARKET</small><b>{draft.market}</b></div><div><small>CONTRACT</small><b>{draft.contract}</b></div><div><small>FREQUENCY WINDOW</small><b>{draft.frequencyWindow} ticks</b></div><div><small>FREQUENCY THRESHOLD</small><b>{draft.threshold}%</b></div><div><small>MIN. QUALIFYING DIGITS</small><b>{draft.qualifyingDigits}</b></div><div><small>SEQUENCE</small><b>{draft.sequenceLength} consecutive digit(s)</b></div><div><small>SEQUENCE WINDOW</small><b>{draft.sequenceWindow} ticks</b></div><div><small>INITIAL STAKE</small><b>{draft.stake}</b></div><div><small>MARTINGALE</small><b>{draft.martingaleMultiplier}× · max {draft.maxMartingaleSteps} steps</b></div><div><small>TAKE PROFIT</small><b>{draft.takeProfit}</b></div><div><small>STOP LOSS</small><b>{draft.stopLoss}</b></div><div><small>MAXIMUM STAKE</small><b>{draft.maxStake}</b></div><div><small>MAX CONCURRENT TRADES</small><b>{draft.maxTrades}</b></div><div><small>VIRTUAL HOOK</small><b>{virtualHook?"ON":"OFF"}</b></div></div><div className="review-instructions"><small>ORIGINAL INSTRUCTIONS</small><p>{draft.instructions || "No natural-language instructions supplied."}</p></div><div className="modal-footer"><button className="secondary-button" onClick={() => { setReviewOpen(false); setPage("builder"); }}>Edit conditions</button><button className="secondary-button" onClick={() => saveStrategy(false)}>Save as draft</button><button className="primary-button" onClick={() => saveStrategy(true)}>Confirm & save <span>→</span></button></div></section></div>}
         </div>
         <footer className="footer"><span>SUPA AI <span className="footer-dot">•</span> TRADING INTELLIGENCE</span><span>Trade responsibly.</span></footer>
       </section>
+      <style jsx global>{`
+        .market-monitor-panel{padding:20px}.market-controls{display:grid;grid-template-columns:minmax(220px,2fr) repeat(3,minmax(120px,1fr));gap:14px;align-items:end;margin-bottom:22px}
+        .market-controls label{display:flex;flex-direction:column;gap:8px;font-size:12px;font-weight:700}.market-controls select{min-height:42px;border:1px solid #dfe5ee;border-radius:10px;padding:0 12px;background:white;color:inherit}
+        .tick-stat{display:flex;flex-direction:column;gap:7px;border:1px solid #e7ebf2;border-radius:10px;padding:10px 12px;min-height:62px;justify-content:center}.tick-stat small{font-size:10px;opacity:.65;letter-spacing:.06em}.tick-stat strong{font-size:15px;overflow-wrap:anywhere}
+        .digit-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:16px 0 26px}.digit-card{border:1px solid;border-radius:12px;padding:13px;min-width:0}.digit-card-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+        .digit-card-top span,.digit-card small{font-size:11px;opacity:.65}.digit-card-top b{font-size:22px}.digit-card>strong{display:block;font-size:21px}.digit-progress{height:5px;background:#eef1f6;border-radius:99px;overflow:hidden;margin-top:12px}.digit-progress span{display:block;height:100%;border-radius:99px}
+        .recent-ticks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.recent-tick{display:flex;align-items:center;gap:10px;border:1px solid #edf0f5;border-radius:9px;padding:8px 10px;min-width:0}
+        .recent-tick small{opacity:.65;font-size:10px}.recent-tick strong{margin-left:auto;font-size:12px;overflow:hidden;text-overflow:ellipsis}.recent-tick span{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:6px;color:white;font-size:12px;font-weight:800}
+        @media(max-width:760px){.app-shell{display:flex!important;flex-direction:column!important;min-height:100vh}.sidebar{width:100%!important;min-width:0!important;position:sticky;top:0;z-index:50;padding:10px 12px!important}.brand-lockup{display:none!important}
+        .workspace-label{padding:4px 8px 8px!important;font-size:10px!important;letter-spacing:.12em}.side-nav{display:flex!important;flex-direction:row!important;gap:8px!important;overflow-x:auto!important;overflow-y:hidden;white-space:nowrap;padding:0 0 8px;scrollbar-width:thin;-webkit-overflow-scrolling:touch}
+        .nav-item{flex:0 0 auto!important;width:auto!important;min-width:max-content;padding:10px 12px!important}.sidebar-bottom{display:none!important}.main-area{width:100%!important;min-width:0!important}
+        .topbar{padding:10px 12px!important;gap:8px;flex-wrap:wrap}.top-actions{gap:6px!important;flex-wrap:wrap}.page-content{padding:14px!important}.page-heading-row{align-items:flex-start!important;flex-direction:column!important;gap:12px}
+        .metrics-grid,.lower-grid{grid-template-columns:1fr!important}.market-controls{grid-template-columns:1fr 1fr}.digit-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.recent-ticks{grid-template-columns:1fr 1fr}.builder-layout{grid-template-columns:1fr!important}.footer{padding:12px!important}}
+        @media(max-width:420px){.market-controls,.recent-ticks{grid-template-columns:1fr}.account-mode-button{font-size:10px!important;padding:6px 8px!important}}
+      `}</style>
     </main>
   );
 }
