@@ -174,78 +174,162 @@ useEffect(() => {
   };
 }, []);
 
-  useEffect(() => {
-    // Public market data only: this socket does not authorize or place trades.
-    const appId =
-      process.env.NEXT_PUBLIC_DERIV_APP_ID ||
-      process.env.NEXT_PUBLIC_DERIV_CLIENT_ID ||
-      "1089";
-    let socket: WebSocket | null = null;
-    let reconnectTimer: number | undefined;
-    let stopped = false;
+ useEffect(() => {
+  // Public market data only. No authentication or trading actions.
+  const endpoint =
+    "wss://api.derivws.com/trading/v1/options/ws/public";
 
-    const connect = () => {
-      if (stopped) return;
-      setMarketStatus("connecting");
-      setMarketError("");
-      try {
-        socket = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${encodeURIComponent(appId)}`);
-        socket.onopen = () => {
-          if (stopped || !socket) return;
-          socket.send(JSON.stringify({ ticks: marketSymbol, subscribe: 1 }));
-        };
-        socket.onmessage = (event) => {
-          try {
-            const message = JSON.parse(event.data);
-            if (message.error) {
-              setMarketError(message.error.message || "Deriv returned a market-data error.");
-              setMarketStatus("error");
-              return;
-            }
-            if (message.msg_type === "tick" && message.tick) {
-              const tick = message.tick;
-              const quote = String(tick.quote);
-              const decimals = quote.includes(".") ? quote.split(".")[1].length : 0;
-              const digit = decimals > 0
-                ? Number(quote.replace(".", "").slice(-1))
-                : Number(quote.slice(-1));
-              if (!Number.isInteger(digit) || digit < 0 || digit > 9) return;
-              setMarketTicks((previous) => [
-                ...previous,
-                { quote, digit, epoch: Number(tick.epoch) || Math.floor(Date.now() / 1000) },
-              ].slice(-100));
-              setMarketStatus("live");
-            }
-          } catch {
-            setMarketError("Could not read a market-data message.");
+  let socket: WebSocket | null = null;
+  let reconnectTimer: number | undefined;
+  let stopped = false;
+  let reconnectDelay = 2000;
+
+  setMarketTicks([]);
+  setMarketStatus("connecting");
+  setMarketError("");
+
+  const connect = () => {
+    if (stopped) return;
+
+    setMarketStatus("connecting");
+
+    try {
+      socket = new WebSocket(endpoint);
+
+      socket.onopen = () => {
+        if (stopped || !socket) return;
+
+        reconnectDelay = 2000;
+        setMarketError("");
+
+        socket.send(
+          JSON.stringify({
+            ticks: marketSymbol,
+            subscribe: 1,
+          })
+        );
+      };
+
+      socket.onmessage = (event) => {
+        if (stopped) return;
+
+        try {
+          const message = JSON.parse(event.data);
+
+          if (message.error) {
+            setMarketError(
+              message.error.message ||
+                "Deriv returned a market-data error."
+            );
+            setMarketStatus("error");
+            return;
           }
-        };
-        socket.onerror = () => {
-          setMarketStatus("error");
-          setMarketError("Market connection failed. Check the Deriv app ID and try again.");
-        };
-        socket.onclose = () => {
-          if (stopped) return;
-          setMarketStatus("disconnected");
-          reconnectTimer = window.setTimeout(connect, 3000);
-        };
-      } catch {
-        setMarketStatus("error");
-        setMarketError("This browser could not start the market connection.");
-      }
-    };
 
-    setMarketTicks([]);
-    connect();
-    return () => {
-      stopped = true;
-      if (reconnectTimer) window.clearTimeout(reconnectTimer);
-      if (socket) {
-        socket.onclose = null;
-        try { socket.close(); } catch {}
+          if (message.msg_type !== "tick" || !message.tick) {
+            return;
+          }
+
+          const tick = message.tick;
+          const quote = String(tick.quote);
+
+          // Preserve trailing decimal zeros where supplied by the API.
+          const decimalPlaces = quote.includes(".")
+            ? quote.split(".")[1].length
+            : 0;
+
+          const digit = decimalPlaces > 0
+            ? Number(quote.replace(".", "").slice(-1))
+            : Number(quote.slice(-1));
+
+          if (
+            !Number.isInteger(digit) ||
+            digit < 0 ||
+            digit > 9
+          ) {
+            return;
+          }
+
+          const epoch =
+            Number(tick.epoch) || Math.floor(Date.now() / 1000);
+
+          setMarketTicks((previous) => {
+            // Ignore duplicate or out-of-order timestamps when possible.
+            const last = previous[previous.length - 1];
+
+            if (last && epoch < last.epoch) {
+              return previous;
+            }
+
+            return [
+              ...previous,
+              { quote, digit, epoch },
+            ].slice(-100);
+          });
+
+          setMarketStatus("live");
+          setMarketError("");
+        } catch {
+          setMarketError(
+            "Could not interpret a market-data response."
+          );
+        }
+      };
+
+      socket.onerror = () => {
+        if (stopped) return;
+
+        setMarketStatus("error");
+        setMarketError(
+          "The public market-data connection encountered an error."
+        );
+      };
+
+      socket.onclose = () => {
+        if (stopped) return;
+
+        setMarketStatus("disconnected");
+        setMarketError(
+          "Market data disconnected. Attempting to reconnect..."
+        );
+
+        reconnectTimer = window.setTimeout(() => {
+          reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+          connect();
+        }, reconnectDelay);
+      };
+    } catch {
+      setMarketStatus("error");
+      setMarketError(
+        "This browser could not start the market-data connection."
+      );
+
+      reconnectTimer = window.setTimeout(connect, reconnectDelay);
+    }
+  };
+
+  connect();
+
+  return () => {
+    stopped = true;
+
+    if (reconnectTimer !== undefined) {
+      window.clearTimeout(reconnectTimer);
+    }
+
+    if (socket) {
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+
+      try {
+        socket.close();
+      } catch {
+        // Ignore errors while cleaning up the connection.
       }
-    };
-  }, [marketSymbol]);
+    }
+  };
+}, [marketSymbol]); 
 
   const frequencies = useMemo(() => {
     const counts = Array(10).fill(0) as number[];
