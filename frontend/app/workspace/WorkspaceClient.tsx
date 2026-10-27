@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-
+type SelectedDerivAccount = {
+  accountId: string;
+  accountType: string;
+  currency: string;
+  balance: number | string | null;
+  isVirtual: boolean;
+};
 type Strategy = {
   id: string;
   name: string;
@@ -61,16 +67,37 @@ function readSavedStrategies(): Strategy[] {
 export default function Home({ previewMode = false }: { previewMode?: boolean }) {
   const [page, setPage] = useState("dashboard");
   const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [selectedAccount, setSelectedAccount] =
+  useState<SelectedDerivAccount | null>(null);
   const [draft, setDraft] = useState<Strategy>(initialStrategy);
   const [mode, setMode] = useState<"ai" | "manual">("ai");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const [lastDigits] = useState([7, 3, 9, 1, 4, 7, 5, 3, 8, 1, 9, 5, 3, 7, 1, 5, 9, 3, 4, 7]);
 
-  useEffect(() => {
-    setStrategies(readSavedStrategies());
-  }, []);
+ useEffect(() => {
+  setStrategies(readSavedStrategies());
 
+  try {
+    const savedAccount = sessionStorage.getItem(
+      "supa_deriv_selected_account"
+    );
+
+    if (savedAccount) {
+      const account = JSON.parse(savedAccount);
+
+      if (
+        account &&
+        typeof account === "object" &&
+        typeof account.isVirtual === "boolean"
+      ) {
+        setSelectedAccount(account as SelectedDerivAccount);
+      }
+    }
+  } catch {
+    setSelectedAccount(null);
+  }
+}, []);
   const frequencies = useMemo(() => {
     const counts = Array(10).fill(0) as number[];
     lastDigits.forEach((d) => counts[d]++);
@@ -159,7 +186,69 @@ export default function Home({ previewMode = false }: { previewMode?: boolean })
       <section className="main-area">
         <header className="topbar">
           <div className="breadcrumbs"><span>Workspace</span><span className="crumb-slash">/</span><b>{pageTitle}</b></div>
-          <div className="top-actions">{previewMode ? <button className="secondary-button account-mode-button" onClick={() => window.location.assign("/")}>Exit preview ↗</button> : <button className="secondary-button account-mode-button" onClick={() => window.location.assign("/account")}>Choose account ↗</button>}<button className="icon-button" aria-label="Notifications">♧</button><div className="avatar small">SA</div></div>
+          <div className="top-actions">
+  {selectedAccount && (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-end",
+        marginRight: "12px",
+        gap: "4px",
+      }}
+    >
+      <span
+        style={{
+          fontSize: "11px",
+          fontWeight: 700,
+          letterSpacing: "1px",
+          color: selectedAccount.isVirtual ? "#D9A441" : "#36C995",
+        }}
+      >
+        {selectedAccount.isVirtual ? "DEMO ACCOUNT" : "REAL ACCOUNT"}
+      </span>
+
+      <strong style={{ fontSize: "16px" }}>
+        {selectedAccount.balance !== null &&
+        selectedAccount.balance !== "" &&
+        Number.isFinite(Number(selectedAccount.balance))
+          ? `${selectedAccount.currency || ""} ${Number(
+              selectedAccount.balance
+            ).toLocaleString(undefined, {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}`.trim()
+          : "Balance unavailable"}
+      </strong>
+
+      <small style={{ opacity: 0.7 }}>
+        {selectedAccount.accountId}
+      </small>
+    </div>
+  )}
+
+  {previewMode ? (
+    <button
+      className="secondary-button account-mode-button"
+      onClick={() => window.location.assign("/")}
+    >
+      Exit preview ↗
+    </button>
+  ) : (
+    <button
+      className="secondary-button account-mode-button"
+      onClick={() => window.location.assign("/account")}
+    >
+      Choose account ↗
+    </button>
+  )}
+
+  <button className="icon-button" aria-label="Notifications">
+    ♧
+  </button>
+
+  <div className="avatar small">SA</div>
+</div>
         </header>
 
         <div className="page-content">
