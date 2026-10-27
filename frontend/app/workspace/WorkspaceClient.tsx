@@ -22,6 +22,10 @@ type Strategy = {
   stake: number;
   martingaleMultiplier: number;
   maxMartingaleSteps: number;
+  takeProfit: number;
+  stopLoss: number;
+  maxStake: number;
+  maxTrades: number;
   status: "Draft" | "Awaiting review" | "Monitoring" | "Paused";
   createdAt: string;
 };
@@ -40,6 +44,10 @@ const initialStrategy: Strategy = {
   stake: 1,
   martingaleMultiplier: 2,
   maxMartingaleSteps: 3,
+  takeProfit: 10,
+  stopLoss: 5,
+  maxStake: 10,
+  maxTrades: 5,
   status: "Draft",
   createdAt: new Date().toISOString()
 };
@@ -51,6 +59,8 @@ const navItems = [
   { id: "trades", label: "Active Trades", icon: "↗" },
   { id: "history", label: "Trade History", icon: "◷" },
   { id: "risk", label: "Risk Controls", icon: "◇" },
+  { id: "bots", label: "Bots", icon: "◉" },
+  { id: "offline", label: "Offline Trading", icon: "▣" },
   { id: "settings", label: "Settings", icon: "⚙" }
 ];
 
@@ -73,17 +83,36 @@ export default function Home({ previewMode = false }: { previewMode?: boolean })
   const [mode, setMode] = useState<"ai" | "manual">("ai");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [notice, setNotice] = useState("");
-  const [marketSymbol, setMarketSymbol] = useState("R_100");
-  const [marketTicks, setMarketTicks] = useState<Array<{ quote: string; digit: number; epoch: number }>>([]);
-  const [marketStatus, setMarketStatus] = useState<"connecting" | "live" | "disconnected" | "error">("connecting");
-  const [marketError, setMarketError] = useState("");
-  const marketNames: Record<string, string> = {
-    R_100: "Volatility 100 Index",
-    R_75: "Volatility 75 Index",
-    R_50: "Volatility 50 Index",
-    R_25: "Volatility 25 Index",
-    R_10: "Volatility 10 Index",
-  };
+  const [lastDigits] = useState([7, 3, 9, 1, 4, 7, 5, 3, 8, 1, 9, 5, 3, 7, 1, 5, 9, 3, 4, 7]);
+  const [virtualHook, setVirtualHook] = useState(false);
+  const [offlineEnabled, setOfflineEnabled] = useState(false);
+  const [botRunning, setBotRunning] = useState(false);
+  const [floatingDigitsOpen, setFloatingDigitsOpen] = useState(false);
+  const [offlineContracts, setOfflineContracts] = useState<Array<{id:string;time:string;market:string;contract:string;result:string;mode:string;profit:string}>>([]);
+  const [botName, setBotName] = useState("My first bot");
+  const [communitySharing, setCommunitySharing] = useState(false);
+  const [controlsHydrated, setControlsHydrated] = useState(false);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("supa-ai-frontend-controls");
+      if (saved) {
+        const v = JSON.parse(saved);
+        setVirtualHook(Boolean(v.virtualHook));
+        setOfflineEnabled(Boolean(v.offlineEnabled));
+        setBotRunning(Boolean(v.botRunning));
+        setOfflineContracts(Array.isArray(v.offlineContracts) ? v.offlineContracts.slice(-100) : []);
+        setCommunitySharing(Boolean(v.communitySharing));
+      }
+    } catch { /* Start with safe defaults if local browser data is invalid. */ }
+    setControlsHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!controlsHydrated) return;
+    try { localStorage.setItem("supa-ai-frontend-controls", JSON.stringify({virtualHook, offlineEnabled, botRunning, offlineContracts: offlineContracts.slice(-100), communitySharing})); }
+    catch { /* Backend persistence will replace browser-only storage. */ }
+  }, [virtualHook, offlineEnabled, botRunning, offlineContracts, communitySharing, controlsHydrated]);
 
 useEffect(() => {
   setStrategies(readSavedStrategies());
@@ -174,170 +203,12 @@ useEffect(() => {
   };
 }, []);
 
- useEffect(() => {
-  // Public market data only. No authentication or trading actions.
-  const endpoint =
-    "wss://api.derivws.com/trading/v1/options/ws/public";
-
-  let socket: WebSocket | null = null;
-  let reconnectTimer: number | undefined;
-  let stopped = false;
-  let reconnectDelay = 2000;
-
-  setMarketTicks([]);
-  setMarketStatus("connecting");
-  setMarketError("");
-
-  const connect = () => {
-    if (stopped) return;
-
-    setMarketStatus("connecting");
-
-    try {
-      socket = new WebSocket(endpoint);
-
-      socket.onopen = () => {
-        if (stopped || !socket) return;
-
-        reconnectDelay = 2000;
-        setMarketError("");
-
-        socket.send(
-          JSON.stringify({
-            ticks: marketSymbol,
-            subscribe: 1,
-          })
-        );
-      };
-
-      socket.onmessage = (event) => {
-        if (stopped) return;
-
-        try {
-          const message = JSON.parse(event.data);
-
-          if (message.error) {
-            setMarketError(
-              message.error.message ||
-                "Deriv returned a market-data error."
-            );
-            setMarketStatus("error");
-            return;
-          }
-
-          if (message.msg_type !== "tick" || !message.tick) {
-            return;
-          }
-
-          const tick = message.tick;
-          const quote = String(tick.quote);
-
-          // Preserve trailing decimal zeros where supplied by the API.
-          const decimalPlaces = quote.includes(".")
-            ? quote.split(".")[1].length
-            : 0;
-
-          const digit = decimalPlaces > 0
-            ? Number(quote.replace(".", "").slice(-1))
-            : Number(quote.slice(-1));
-
-          if (
-            !Number.isInteger(digit) ||
-            digit < 0 ||
-            digit > 9
-          ) {
-            return;
-          }
-
-          const epoch =
-            Number(tick.epoch) || Math.floor(Date.now() / 1000);
-
-          setMarketTicks((previous) => {
-            // Ignore duplicate or out-of-order timestamps when possible.
-            const last = previous[previous.length - 1];
-
-            if (last && epoch < last.epoch) {
-              return previous;
-            }
-
-            return [
-              ...previous,
-              { quote, digit, epoch },
-            ].slice(-100);
-          });
-
-          setMarketStatus("live");
-          setMarketError("");
-        } catch {
-          setMarketError(
-            "Could not interpret a market-data response."
-          );
-        }
-      };
-
-      socket.onerror = () => {
-        if (stopped) return;
-
-        setMarketStatus("error");
-        setMarketError(
-          "The public market-data connection encountered an error."
-        );
-      };
-
-      socket.onclose = () => {
-        if (stopped) return;
-
-        setMarketStatus("disconnected");
-        setMarketError(
-          "Market data disconnected. Attempting to reconnect..."
-        );
-
-        reconnectTimer = window.setTimeout(() => {
-          reconnectDelay = Math.min(reconnectDelay * 2, 30000);
-          connect();
-        }, reconnectDelay);
-      };
-    } catch {
-      setMarketStatus("error");
-      setMarketError(
-        "This browser could not start the market-data connection."
-      );
-
-      reconnectTimer = window.setTimeout(connect, reconnectDelay);
-    }
-  };
-
-  connect();
-
-  return () => {
-    stopped = true;
-
-    if (reconnectTimer !== undefined) {
-      window.clearTimeout(reconnectTimer);
-    }
-
-    if (socket) {
-      socket.onopen = null;
-      socket.onmessage = null;
-      socket.onerror = null;
-      socket.onclose = null;
-
-      try {
-        socket.close();
-      } catch {
-        // Ignore errors while cleaning up the connection.
-      }
-    }
-  };
-}, [marketSymbol]); 
-
   const frequencies = useMemo(() => {
     const counts = Array(10).fill(0) as number[];
-    marketTicks.forEach((tick) => counts[tick.digit]++);
-    const total = marketTicks.length;
-    return counts.map((count, digit) => ({ digit, count, percent: total ? (count / total) * 100 : 0 }))
+    lastDigits.forEach((d) => counts[d]++);
+    return counts.map((count, digit) => ({ digit, count, percent: (count / lastDigits.length) * 100 }))
       .sort((a, b) => a.digit - b.digit);
-  }, [marketTicks]);
+  }, [lastDigits]);
 
   function updateDraft<K extends keyof Strategy>(key: K, value: Strategy[K]) {
     setDraft((old) => ({ ...old, [key]: value }));
@@ -403,19 +274,13 @@ useEffect(() => {
           <div className="brand-mark">S<span>+</span></div>
           <div><div className="brand-name">supa<span>ai</span></div><div className="brand-subtitle">TRADING INTELLIGENCE</div></div>
         </div>
+       <nav className="sidebar-nav">
        <button
   type="button"
   className="workspace-label"
-  onClick={() => {
-    setPage("dashboard");
-    setReviewOpen(false);
-    setNotice("");
-  }}
+  onClick={() => setPage("dashboard")}
   style={{
     display: "block",
-    position: "relative",
-    zIndex: 10,
-    pointerEvents: "auto",
     width: "100%",
     border: "none",
     background: "transparent",
@@ -426,19 +291,7 @@ useEffect(() => {
 >
   WORKSPACE
 </button>
-        <nav className="side-nav" aria-label="Main navigation">
-          {navItems.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={`nav-item ${page === item.id ? "active" : ""}`}
-              onClick={() => setPage(item.id)}
-            >
-              <span className="nav-icon">{item.icon}</span>
-              <span>{item.label}</span>
-              {item.id === "builder" && <span className="nav-new">NEW</span>}
-            </button>
-          ))}
+        {navItems.map((item) => <button key={item.id} type="button" className={`nav-item ${page === item.id ? "active" : ""}`} onClick={() => setPage(item.id)}><span>{item.icon}</span><span>{item.label}</span></button>)}
         </nav>
         <div className="sidebar-bottom">
           <div className="profile-row"><div className="avatar">SA</div><div><b>Supa AI Workspace</b><small>{previewMode ? "Preview only" : "Deriv-authorized workspace"}</small></div><span className="more-dots">•••</span></div>
@@ -455,10 +308,8 @@ useEffect(() => {
         display: "flex",
         flexDirection: "column",
         alignItems: "flex-end",
-        marginRight: "8px",
-        gap: "2px",
-        lineHeight: 1.1,
-        maxWidth: "150px",
+        marginRight: "12px",
+        gap: "4px",
       }}
     >
       <span
@@ -472,7 +323,7 @@ useEffect(() => {
         {selectedAccount.isVirtual ? "DEMO ACCOUNT" : "REAL ACCOUNT"}
       </span>
 
-      <strong style={{ fontSize: "11px", lineHeight: 1.1, fontWeight: 600, whiteSpace: "nowrap" }}>
+      <strong style={{ fontSize: "16px" }}>
         {selectedAccount.balance !== null &&
         selectedAccount.balance !== "" &&
         Number.isFinite(Number(selectedAccount.balance))
@@ -485,7 +336,7 @@ useEffect(() => {
           : "Balance unavailable"}
       </strong>
 
-      <small style={{ opacity: 0.7, fontSize: "9px", lineHeight: 1, whiteSpace: "nowrap" }}>
+      <small style={{ opacity: 0.7 }}>
         {selectedAccount.accountId}
       </small>
     </div>
@@ -510,26 +361,6 @@ useEffect(() => {
   <button className="icon-button" aria-label="Notifications">
     ♧
   </button>
-
-  {!previewMode && (
-    <button
-      type="button"
-      className="secondary-button account-mode-button"
-      onClick={async () => {
-        try {
-          await fetch("/api/auth/deriv/logout", { method: "POST", cache: "no-store" });
-        } catch {
-          // Continue clearing the local account selection if the request fails.
-        }
-        sessionStorage.removeItem("supa_deriv_selected_account");
-        setSelectedAccount(null);
-        window.location.assign("/");
-      }}
-      style={{ fontSize: "11px", padding: "7px 10px", whiteSpace: "nowrap" }}
-    >
-      Log out
-    </button>
-  )}
 
   <div className="avatar small">SA</div>
 </div>
@@ -561,7 +392,7 @@ useEffect(() => {
                 {strategies.length === 0 ? <div className="empty-state"><div className="empty-icon">⌘</div><b>No saved strategies yet</b><p>Create a strategy above to get started.</p><button className="secondary-button" onClick={() => setPage("builder")}>Build your first strategy</button></div> : <div className="strategy-list">{strategies.map(s => <div className="strategy-row" key={s.id}><div className="strategy-symbol">{s.contract === "ODD" ? "◐" : "◑"}</div><div className="strategy-info"><b>{s.name}</b><small>{s.market} · {s.contract}</small></div><span className={`strategy-status ${s.status.toLowerCase().replace(" ","-")}`}>{s.status}</span><button className="row-action" onClick={() => editStrategy(s)}>Edit</button><button className="row-action" onClick={() => togglePause(s)}>{s.status === "Paused" ? "Resume" : "Pause"}</button></div>)}</div>}
               </section>
               <section className="panel market-card">
-                <div className="panel-heading"><div><h2>Digit frequency snapshot</h2><p>{marketNames[marketSymbol]} · {marketTicks.length} recent ticks</p></div><span className="live-tag"><span className={`status-dot ${marketStatus === "live" ? "" : "amber"}`}/> {marketStatus === "live" ? "LIVE" : marketStatus.toUpperCase()}</span></div>
+                <div className="panel-heading"><div><h2>Digit frequency snapshot</h2><p>Illustrative digit-frequency snapshot</p></div><span className="live-tag"><span className="status-dot amber"/> SAMPLE</span></div>
                 <div className="frequency-bars">{frequencies.map(f => <div className="frequency-item" key={f.digit}><div className="frequency-value">{f.percent.toFixed(0)}%</div><div className="frequency-track"><div className={`frequency-fill ${f.digit % 2 ? "odd-fill" : ""}`} style={{height:`${Math.max(5,f.percent*2.5)}%`}}/></div><div className="frequency-digit">{f.digit}</div></div>)}</div>
                 <div className="chart-footnote"><span><i className="legend-dot" /> Even digits</span><span><i className="legend-dot odd" /> Odd digits</span><button className="text-button" onClick={() => setPage("markets")}>Market monitor ↗</button></div>
               </section>
@@ -578,8 +409,8 @@ useEffect(() => {
                 {mode === "manual" && <div className="form-stack"><div className="form-grid"><label>Strategy name<input value={draft.name} onChange={(e) => updateDraft("name", e.target.value)} placeholder="e.g. ODD frequency setup"/></label><label>Market<select value={draft.market} onChange={(e) => updateDraft("market", e.target.value)}><option>Volatility 100 Index</option><option>Volatility 75 Index</option><option>Volatility 50 Index</option><option>Volatility 25 Index</option><option>Volatility 10 Index</option><option>Choose after connecting</option></select></label><label>Contract type<select value={draft.contract} onChange={(e) => updateDraft("contract", e.target.value as Strategy["contract"])}><option>ODD</option><option>EVEN</option></select></label><label>Frequency window (ticks)<input type="number" min="10" max="10000" value={draft.frequencyWindow} onChange={(e) => updateDraft("frequencyWindow", Math.max(10,Number(e.target.value)))}/></label><label>Frequency threshold (%)<input type="number" min="0" max="100" step="0.1" value={draft.threshold} onChange={(e) => updateDraft("threshold", Number(e.target.value))}/></label><label>Minimum qualifying digits<input type="number" min="1" max="5" value={draft.qualifyingDigits} onChange={(e) => updateDraft("qualifyingDigits", Number(e.target.value))}/></label><label>Required sequence length<input type="number" min="1" max="10" value={draft.sequenceLength} onChange={(e) => updateDraft("sequenceLength", Number(e.target.value))}/></label><label>Sequence window (ticks)<input type="number" min="1" max="100" value={draft.sequenceWindow} onChange={(e) => updateDraft("sequenceWindow", Number(e.target.value))}/></label></div><label className="field-label">FULL STRATEGY NOTES / EXTRA CONDITIONS<textarea className="instruction-input notes-input" value={draft.instructions} onChange={(e) => updateDraft("instructions", e.target.value)} /></label></div>}
                 <div className="section-divider"/>
                 <div className="step-header"><span className="step-number">02</span><div><h2>Risk and stake settings</h2><p>Configure your stake and risk limits.</p></div></div>
-                <div className="form-grid"><label>Initial stake<input type="number" min="0.35" step="0.01" value={draft.stake} onChange={(e) => updateDraft("stake", Number(e.target.value))}/><small className="field-help">Use a valid amount for the selected contract.</small></label><label>Martingale multiplier<input type="number" min="1" max="10" step="0.1" value={draft.martingaleMultiplier} onChange={(e) => updateDraft("martingaleMultiplier", Number(e.target.value))}/></label><label>Maximum progression steps<input type="number" min="0" max="10" value={draft.maxMartingaleSteps} onChange={(e) => updateDraft("maxMartingaleSteps", Number(e.target.value))}/></label></div>
-                <div className="builder-footer"><button className="secondary-button" onClick={() => { setDraft(initialStrategy); setReviewOpen(false); }}>Reset form</button><button className="primary-button" onClick={() => { setReviewOpen(true); setDraft({...draft,status:"Awaiting review"}); }}>Review all rules →</button></div>
+                <div className="form-grid"><label>Initial stake<input type="number" min="0.35" step="0.01" value={draft.stake} onChange={(e) => updateDraft("stake", Number(e.target.value))}/><small className="field-help">Use a valid amount for the selected contract.</small></label><label>Martingale multiplier<input type="number" min="1" max="10" step="0.1" value={draft.martingaleMultiplier} onChange={(e) => updateDraft("martingaleMultiplier", Number(e.target.value))}/></label><label>Maximum progression steps<input type="number" min="0" max="10" value={draft.maxMartingaleSteps} onChange={(e) => updateDraft("maxMartingaleSteps", Number(e.target.value))}/></label><label>Take-profit limit<input type="number" min="0" step="0.01" value={draft.takeProfit} onChange={(e) => updateDraft("takeProfit", Number(e.target.value))}/></label><label>Stop-loss limit<input type="number" min="0" step="0.01" value={draft.stopLoss} onChange={(e) => updateDraft("stopLoss", Number(e.target.value))}/></label><label>Maximum stake<input type="number" min="0.35" step="0.01" value={draft.maxStake} onChange={(e) => updateDraft("maxStake", Number(e.target.value))}/></label><label>Maximum concurrent trades<input type="number" min="1" max="50" value={draft.maxTrades} onChange={(e) => updateDraft("maxTrades", Number(e.target.value))}/></label></div>
+                <div className="panel" style={{padding:14,marginTop:16}}><label style={{display:"flex",gap:10,alignItems:"center"}}><input type="checkbox" checked={virtualHook} onChange={e=>setVirtualHook(e.target.checked)}/><b>Virtual Hook {virtualHook?"ON":"OFF"}</b></label><p style={{margin:"8px 0 0",fontSize:12,opacity:.75}}>When enabled, the future execution engine will simulate eligible entries before permitting real entries. A virtual win is not a prediction or guarantee. Real trading remains locked until tested and explicitly authorized.</p></div><div className="builder-footer"><button className="secondary-button" onClick={() => { setDraft(initialStrategy); setReviewOpen(false); }}>Reset form</button><button className="primary-button" onClick={() => { setReviewOpen(true); setDraft({...draft,status:"Awaiting review"}); }}>Review all rules →</button></div>
               </div>
               <aside className="builder-side">
                 <div className="panel checklist-panel"><h3>Before activation</h3><div className="check-row"><span className="check-pending">1</span><div><b>Define conditions</b><small>Set market and trigger rules</small></div></div><div className="check-row"><span className="check-pending">2</span><div><b>Review interpreted rules</b><small>Verify each threshold and sequence</small></div></div><div className="check-row"><span className="check-pending">3</span><div><b>Validate risk limits</b><small>Confirm stake and progression caps</small></div></div><div className="check-row"><span className="check-pending">4</span><div><b>Connect your account</b><small>Authorize access with Deriv</small></div></div></div>
@@ -588,30 +419,20 @@ useEffect(() => {
             </div>
           </section>}
 
-          {page === "markets" && <section>
-            <div className="page-heading-row"><div><div className="eyebrow">LIVE MARKET DATA</div><h1>Market Monitor</h1><p className="subtitle">Public Deriv ticks and digit frequencies. No trading actions are enabled here.</p></div>
-              <label className="field-label">MARKET
-                <select value={marketSymbol} onChange={(e) => setMarketSymbol(e.target.value)}>
-                  <option value="R_100">Volatility 100 Index</option><option value="R_75">Volatility 75 Index</option><option value="R_50">Volatility 50 Index</option><option value="R_25">Volatility 25 Index</option><option value="R_10">Volatility 10 Index</option>
-                </select>
-              </label>
-            </div>
-            <section className="panel market-card">
-              <div className="panel-heading"><div><h2>{marketNames[marketSymbol]}</h2><p>Last price: {marketTicks.length ? marketTicks[marketTicks.length - 1].quote : "Waiting for first tick…"}</p></div><span className="live-tag"><span className={`status-dot ${marketStatus === "live" ? "" : "amber"}`}/>{marketStatus.toUpperCase()}</span></div>
-              {marketError && <div className="notice-bar"><span>ⓘ</span><span>{marketError}</span></div>}
-              <p className="subtitle">Digits received: {marketTicks.length} / 100 · Frequencies use only the ticks received in this browser session.</p>
-              <div className="frequency-bars">{frequencies.map(f => <div className="frequency-item" key={f.digit}><div className="frequency-value">{f.percent.toFixed(1)}%</div><div className="frequency-track"><div className={`frequency-fill ${f.digit % 2 ? "odd-fill" : ""}`} style={{height:`${Math.max(5,f.percent*2.5)}%`}}/></div><div className="frequency-digit">{f.digit}</div><small>{f.count}</small></div>)}</div>
-              <h3>Recent ticks</h3>
-              <div style={{display:"flex",flexWrap:"wrap",gap:"8px"}}>{marketTicks.slice(-20).reverse().map((tick,index)=><span key={`${tick.epoch}-${index}`} title={new Date(tick.epoch*1000).toLocaleTimeString()} style={{padding:"6px 9px",borderRadius:"8px",background:tick.digit%2 ? "rgba(54,201,149,.14)" : "rgba(217,164,65,.14)"}}>{tick.digit}</span>)}</div>
-            </section>
-          </section>}
-          {page === "trades" && <PlaceholderPage title="Active Trades" description="View your open contracts and their current status." icon="↗"/>}
-          {page === "history" && <PlaceholderPage title="Trade History" description="Review settled contracts and past outcomes." icon="◷"/>}
-          {page === "risk" && <PlaceholderPage title="Risk Controls" description="Review your stake, progression, and session risk limits." icon="◇" action="Open Strategy Builder" onAction={() => setPage("builder")}/>}
+          {page === "markets" && <section><div className="page-heading-row"><div><div className="eyebrow">LIVE MARKET WORKSPACE</div><h1>Market Monitor</h1><p className="subtitle">Scan eligible digit markets and review rolling 1,000-tick analysis. Live analysis wiring remains in the existing market connection.</p></div><span className="draft-pill">1,000-TICK WINDOW</span></div><div className="panel" style={{padding:20,marginBottom:16}}><h2>Market scan status</h2><p>Market discovery, historical tick loading, and per-market live buffers will be connected to the Deriv feed in the next implementation stage.</p><div className="metrics-grid"><Metric label="ANALYSIS WINDOW" value="1,000" foot="Ticks per market" icon="⌁"/><Metric label="MARKETS FOUND" value="—" foot="Awaiting scanner integration" icon="▦"/><Metric label="QUALIFIED MARKETS" value="—" foot="No qualification claimed yet" icon="✓"/><Metric label="SCANNER STATUS" value="UI READY" foot="Backend/stream integration pending" icon="◷"/></div></div><div className="panel" style={{padding:20}}><h2>Digit ranking legend</h2><p>Shared ranking colours will be used by Market Monitor and the floating digit tool.</p><div style={{display:"flex",gap:12,flexWrap:"wrap"}}>{[["Highest frequency","#20b981"],["Second highest","#3987ff"],["Lowest frequency","#ef5350"],["Second lowest","#f59e0b"]].map(([label,color])=><span key={label} style={{padding:"8px 12px",borderRadius:9,background:`${color}18`,color, fontWeight:700}}>{label}</span>)}</div></div></section>}
+          {page === "trades" && <section><div className="page-heading-row"><div><div className="eyebrow">EXECUTION MONITOR</div><h1>Active Trades</h1><p className="subtitle">Open contracts will appear here after secure execution and contract reconciliation are connected.</p></div><span className="draft-pill">REAL TRADING LOCKED</span></div><div className="panel" style={{padding:20}}><h2>Contract monitor</h2><p>No live contracts are being reported by this frontend-only panel. The UI does not place trades.</p><div style={{overflowX:"auto"}}><table style={{width:"100%",textAlign:"left",borderCollapse:"collapse"}}><thead><tr>{["Time","Market","Contract","Stake","Status","P/L"].map(x=><th key={x} style={{padding:12,borderBottom:"1px solid #26313e"}}>{x}</th>)}</tr></thead><tbody><tr><td colSpan={6} style={{padding:18,opacity:.7}}>No contracts available yet.</td></tr></tbody></table></div></div></section>}
+          {page === "history" && <section><div className="page-heading-row"><div><div className="eyebrow">CONTRACT RECORDS</div><h1>Trade History</h1><p className="subtitle">Settled real contracts and simulated virtual trades will be clearly separated.</p></div></div><div className="panel" style={{padding:20}}><h2>History status</h2><p>Broker-confirmed history will be loaded from the backend. Browser-only UI events are not presented as real contracts.</p></div></section>}
+          {page === "risk" && <section><div className="page-heading-row"><div><div className="eyebrow">ACCOUNT PROTECTION</div><h1>Risk Controls</h1><p className="subtitle">Configure strategy-level limits in Strategy Builder. These frontend settings do not yet enforce broker-side controls.</p></div></div><div className="panel" style={{padding:20}}><div className="form-grid"><label>Current strategy initial stake<input readOnly value={draft.stake}/></label><label>Take profit<input readOnly value={draft.takeProfit}/></label><label>Stop loss<input readOnly value={draft.stopLoss}/></label><label>Maximum stake<input readOnly value={draft.maxStake}/></label><label>Max martingale steps<input readOnly value={draft.maxMartingaleSteps}/></label><label>Max concurrent trades<input readOnly value={draft.maxTrades}/></label></div><button className="primary-button" onClick={() => setPage("builder")}>Edit risk settings →</button></div></section>}
+          {page === "bots" && <section><div className="page-heading-row"><div><div className="eyebrow">AUTOMATION STUDIO</div><h1>Bots</h1><p className="subtitle">Create bots from saved strategies, configure Virtual Hook, and prepare bots for community sharing.</p></div><button className="primary-button" onClick={() => setPage("builder")}>＋ Build a bot</button></div><div className="panel" style={{padding:20,marginBottom:16}}><div className="panel-heading"><div><h2>Bot Builder</h2><p>Frontend configuration only — no orders are sent from this screen.</p></div><span className="draft-pill">DEMO-FIRST</span></div><div className="form-grid"><label>Bot name<input value={botName} onChange={e=>setBotName(e.target.value)} /></label><label>Strategy<select value={draft.id} onChange={e=>{const found=strategies.find(x=>x.id===e.target.value);if(found)setDraft(found)}}><option value={draft.id}>{draft.name || "Current draft"}</option>{strategies.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label></div><div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:16}}><button className={botRunning?"secondary-button":"primary-button"} onClick={()=>{setBotRunning(!botRunning);setNotice(botRunning?"Bot stopped. Existing contracts must still be reconciled by the execution service.":"Bot marked as running in the frontend preview only; no trades are placed.")}}>{botRunning?"■ Stop bot":"▶ Start bot"}</button><button className="secondary-button" onClick={()=>setFloatingDigitsOpen(v=>!v)}>{floatingDigitsOpen?"Hide floating digit tool":"Open floating digit tool"}</button></div><p style={{opacity:.72,marginTop:12}}>Status: <b>{botRunning?"Running (frontend preview)":"Stopped"}</b>. Backend execution is not connected.</p></div><div className="panel" style={{padding:20}}><h2>Community bots</h2><p>Sharing controls are prepared here. Publishing and downloading community bots require backend moderation, validation, and storage.</p><label style={{display:"flex",alignItems:"center",gap:10,marginTop:12}}><input type="checkbox" checked={communitySharing} onChange={e=>setCommunitySharing(e.target.checked)}/> Allow this bot to be marked for community sharing</label><p style={{fontSize:12,opacity:.7}}>This preference is stored locally for now; it does not publish a bot.</p></div></section>}
+
+          {page === "offline" && <section><div className="page-heading-row"><div><div className="eyebrow">BACKGROUND EXECUTION</div><h1>Offline Trading</h1><p className="subtitle">This mode can run while you are online or away once the background worker is implemented.</p></div><span className="draft-pill">WORKER REQUIRED</span></div><div className="panel" style={{padding:20,marginBottom:16}}><div className="panel-heading"><div><h2>Offline execution controls</h2><p>Enable the background-running preference independently of whether you close the dashboard.</p></div></div><div style={{display:"flex",gap:18,flexWrap:"wrap",alignItems:"center"}}><label style={{display:"flex",gap:10,alignItems:"center"}}><input type="checkbox" checked={offlineEnabled} onChange={e=>{setOfflineEnabled(e.target.checked);setNotice(e.target.checked?"Offline mode preference enabled locally. A background worker is required before it can execute while the browser is closed.":"Offline mode disabled.")}}/> <b>Offline Trading {offlineEnabled?"ON":"OFF"}</b></label><label style={{display:"flex",gap:10,alignItems:"center"}}><input type="checkbox" checked={virtualHook} onChange={e=>setVirtualHook(e.target.checked)}/> <b>Virtual Hook {virtualHook?"ON":"OFF"}</b></label><button className="secondary-button" onClick={()=>setBotRunning(false)} disabled={!botRunning}>Stop bot</button><button className="secondary-button" onClick={()=>{if(botRunning){setNotice("Stop the bot before resetting contract history.");return;}if(!window.confirm("Clear the last 100 contracts from this local view? Broker records and open contracts will not be deleted."))return;setOfflineContracts([]);setNotice("Local contract display cleared. Broker records are unchanged.")}} disabled={botRunning}>Reset contracts</button></div><div className="metrics-grid" style={{marginTop:18}}><Metric label="OFFLINE MODE" value={offlineEnabled?"ON":"OFF"} foot="Preference saved in this browser" icon="▣"/><Metric label="VIRTUAL HOOK" value={virtualHook?"ON":"OFF"} foot={virtualHook?"Virtual test before eligible real entry":"Virtual gate disabled"} icon="◎"/><Metric label="BOT STATUS" value={botRunning?"RUNNING":"STOPPED"} foot="Frontend preview state" icon="▶"/><Metric label="CONTRACT HISTORY" value={String(offlineContracts.length).padStart(2,"0")} foot="Maximum 100 displayed" icon="◷"/></div><p style={{marginTop:14,opacity:.75}}>This page currently demonstrates settings and history layout only. It does not run trades in the background until the worker and persistent database are connected.</p></div><div className="panel" style={{padding:20}}><div className="panel-heading"><div><h2>Last 100 contracts</h2><p>Most recent first · real and virtual records must be clearly labelled.</p></div></div><div style={{overflowX:"auto"}}><table style={{width:"100%",textAlign:"left",borderCollapse:"collapse"}}><thead><tr>{["Time","Market","Contract","Result","Mode","Profit/Loss"].map(x=><th key={x} style={{padding:12,borderBottom:"1px solid #26313e"}}>{x}</th>)}</tr></thead><tbody>{offlineContracts.length===0?<tr><td colSpan={6} style={{padding:18,opacity:.7}}>No contract records yet. Real records will appear after backend execution is connected.</td></tr>:offlineContracts.slice(-100).reverse().map(c=><tr key={c.id}>{[c.time,c.market,c.contract,c.result,c.mode,c.profit].map((v,i)=><td key={i} style={{padding:12,borderBottom:"1px solid #26313e"}}>{v}</td>)}</tr>)}</tbody></table></div></div></section>}
+
           {page === "settings" && <section><div className="page-heading-row"><div><div className="eyebrow">WORKSPACE</div><h1>Settings & connections</h1><p className="subtitle">Manage your account connection and trading preferences.</p></div></div><div className="settings-grid"><div className="panel setting-card"><div className="setting-title"><span className="setting-logo deriv-logo">D</span><div><h2>Deriv account</h2><p>Secure account authorization</p></div></div><p className="setting-description">Connect through Deriv's official authorization process. Supa AI will never ask for your Deriv password.</p><button className="primary-button" onClick={() => window.location.assign("/account")}>Choose account ↗</button></div></div></section>}
 
 
-          {reviewOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setReviewOpen(false); }}><section className="review-modal panel" role="dialog" aria-modal="true" aria-labelledby="review-title"><div className="modal-heading"><div><div className="eyebrow">CONFIRMATION REQUIRED</div><h2 id="review-title">Review strategy rules</h2><p>Check every rule before saving. Nothing will be traded.</p></div><button className="icon-button" onClick={() => setReviewOpen(false)} aria-label="Close review">×</button></div><div className="review-warning"><span>!</span><p><b>Demo interface only.</b> The instruction parser is a simple heuristic, not a full AI model. Verify all rules manually.</p></div><div className="review-summary"><div><small>STRATEGY</small><b>{draft.name || "Untitled strategy"}</b></div><div><small>MARKET</small><b>{draft.market}</b></div><div><small>CONTRACT</small><b>{draft.contract}</b></div><div><small>FREQUENCY WINDOW</small><b>{draft.frequencyWindow} ticks</b></div><div><small>FREQUENCY THRESHOLD</small><b>{draft.threshold}%</b></div><div><small>MIN. QUALIFYING DIGITS</small><b>{draft.qualifyingDigits}</b></div><div><small>SEQUENCE</small><b>{draft.sequenceLength} consecutive digit(s)</b></div><div><small>SEQUENCE WINDOW</small><b>{draft.sequenceWindow} ticks</b></div><div><small>INITIAL STAKE</small><b>{draft.stake}</b></div><div><small>MARTINGALE</small><b>{draft.martingaleMultiplier}× · max {draft.maxMartingaleSteps} steps</b></div></div><div className="review-instructions"><small>ORIGINAL INSTRUCTIONS</small><p>{draft.instructions || "No natural-language instructions supplied."}</p></div><div className="modal-footer"><button className="secondary-button" onClick={() => { setReviewOpen(false); setPage("builder"); }}>Edit conditions</button><button className="secondary-button" onClick={() => saveStrategy(false)}>Save as draft</button><button className="primary-button" onClick={() => saveStrategy(true)}>Confirm & save <span>→</span></button></div></section></div>}
+          {floatingDigitsOpen && <aside className="panel" style={{position:"fixed",right:24,bottom:24,zIndex:50,width:320,maxWidth:"calc(100vw - 32px)",padding:18,boxShadow:"0 16px 48px #0008"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><h3 style={{margin:0}}>Floating digit analysis</h3><button className="icon-button" onClick={()=>setFloatingDigitsOpen(false)} aria-label="Close floating digit tool">×</button></div><p style={{fontSize:12,opacity:.7}}>Sample data until the live 1,000-tick feed is connected.</p><div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:6}}>{frequencies.map(f=><div key={f.digit} style={{padding:"8px 4px",textAlign:"center",borderRadius:8,background:"#202b38"}}><b>{f.digit}</b><div style={{fontSize:11}}>{f.percent.toFixed(0)}%</div></div>)}</div><p style={{fontSize:11,opacity:.7,marginBottom:0}}>Ranking colours will match Market Monitor when live market analysis is integrated.</p></aside>}
+
+          {reviewOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setReviewOpen(false); }}><section className="review-modal panel" role="dialog" aria-modal="true" aria-labelledby="review-title"><div className="modal-heading"><div><div className="eyebrow">CONFIRMATION REQUIRED</div><h2 id="review-title">Review strategy rules</h2><p>Check every rule before saving. Nothing will be traded.</p></div><button className="icon-button" onClick={() => setReviewOpen(false)} aria-label="Close review">×</button></div><div className="review-warning"><span>!</span><p><b>Demo interface only.</b> The instruction parser is a simple heuristic, not a full AI model. Verify all rules manually.</p></div><div className="review-summary"><div><small>STRATEGY</small><b>{draft.name || "Untitled strategy"}</b></div><div><small>MARKET</small><b>{draft.market}</b></div><div><small>CONTRACT</small><b>{draft.contract}</b></div><div><small>FREQUENCY WINDOW</small><b>{draft.frequencyWindow} ticks</b></div><div><small>FREQUENCY THRESHOLD</small><b>{draft.threshold}%</b></div><div><small>MIN. QUALIFYING DIGITS</small><b>{draft.qualifyingDigits}</b></div><div><small>SEQUENCE</small><b>{draft.sequenceLength} consecutive digit(s)</b></div><div><small>SEQUENCE WINDOW</small><b>{draft.sequenceWindow} ticks</b></div><div><small>INITIAL STAKE</small><b>{draft.stake}</b></div><div><small>MARTINGALE</small><b>{draft.martingaleMultiplier}× · max {draft.maxMartingaleSteps} steps</b></div><div><small>TAKE PROFIT</small><b>{draft.takeProfit}</b></div><div><small>STOP LOSS</small><b>{draft.stopLoss}</b></div><div><small>MAXIMUM STAKE</small><b>{draft.maxStake}</b></div><div><small>MAX CONCURRENT TRADES</small><b>{draft.maxTrades}</b></div><div><small>VIRTUAL HOOK</small><b>{virtualHook?"ON":"OFF"}</b></div></div><div className="review-instructions"><small>ORIGINAL INSTRUCTIONS</small><p>{draft.instructions || "No natural-language instructions supplied."}</p></div><div className="modal-footer"><button className="secondary-button" onClick={() => { setReviewOpen(false); setPage("builder"); }}>Edit conditions</button><button className="secondary-button" onClick={() => saveStrategy(false)}>Save as draft</button><button className="primary-button" onClick={() => saveStrategy(true)}>Confirm & save <span>→</span></button></div></section></div>}
         </div>
         <footer className="footer"><span>SUPA AI <span className="footer-dot">•</span> TRADING INTELLIGENCE</span><span>Trade responsibly.</span></footer>
       </section>
