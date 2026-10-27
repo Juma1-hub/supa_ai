@@ -238,9 +238,16 @@ useEffect(() => {
        <button
   type="button"
   className="workspace-label"
-  onClick={() => setPage("dashboard")}
+  onClick={() => {
+    setPage("dashboard");
+    setReviewOpen(false);
+    setNotice("");
+  }}
   style={{
     display: "block",
+    position: "relative",
+    zIndex: 10,
+    pointerEvents: "auto",
     width: "100%",
     border: "none",
     background: "transparent",
@@ -280,8 +287,10 @@ useEffect(() => {
         display: "flex",
         flexDirection: "column",
         alignItems: "flex-end",
-        marginRight: "12px",
-        gap: "4px",
+        marginRight: "8px",
+        gap: "2px",
+        lineHeight: 1.1,
+        maxWidth: "150px",
       }}
     >
       <span
@@ -295,7 +304,7 @@ useEffect(() => {
         {selectedAccount.isVirtual ? "DEMO ACCOUNT" : "REAL ACCOUNT"}
       </span>
 
-      <strong style={{ fontSize: "13px", lineHeight: 1.2 }}>
+      <strong style={{ fontSize: "11px", lineHeight: 1.1, fontWeight: 600, whiteSpace: "nowrap" }}>
         {selectedAccount.balance !== null &&
         selectedAccount.balance !== "" &&
         Number.isFinite(Number(selectedAccount.balance))
@@ -308,7 +317,7 @@ useEffect(() => {
           : "Balance unavailable"}
       </strong>
 
-      <small style={{ opacity: 0.7 }}>
+      <small style={{ opacity: 0.7, fontSize: "9px", lineHeight: 1, whiteSpace: "nowrap" }}>
         {selectedAccount.accountId}
       </small>
     </div>
@@ -333,6 +342,26 @@ useEffect(() => {
   <button className="icon-button" aria-label="Notifications">
     ♧
   </button>
+
+  {!previewMode && (
+    <button
+      type="button"
+      className="secondary-button account-mode-button"
+      onClick={async () => {
+        try {
+          await fetch("/api/auth/deriv/logout", { method: "POST", cache: "no-store" });
+        } catch {
+          // Continue clearing the local account selection if the request fails.
+        }
+        sessionStorage.removeItem("supa_deriv_selected_account");
+        setSelectedAccount(null);
+        window.location.assign("/");
+      }}
+      style={{ fontSize: "11px", padding: "7px 10px", whiteSpace: "nowrap" }}
+    >
+      Log out
+    </button>
+  )}
 
   <div className="avatar small">SA</div>
 </div>
