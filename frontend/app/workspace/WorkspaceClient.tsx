@@ -221,88 +221,163 @@ useEffect(() => {
     let cancelled = false;
     let socket: WebSocket | null = null;
     let reconnectTimer: number | undefined;
+    let pingTimer: number | undefined;
     let reconnectAttempts = 0;
-    let subscribed = false;
+    let historyLoaded = false;
 
     const parseQuote = (quote: unknown, pipSize: unknown) => {
       const value = Number(quote);
       if (!Number.isFinite(value)) return null;
-      const decimals = Number.isInteger(Number(pipSize)) ? Math.min(10, Math.max(0, Number(pipSize))) : 2;
-      const digits = value.toFixed(decimals).replace(/\D/g, "");
-      return digits ? {quote:value, digit:Number(digits.slice(-1))} : null;
+      const rawPipSize = Number(pipSize);
+      const decimals = Number.isInteger(rawPipSize) && rawPipSize >= 0 && rawPipSize <= 10
+        ? rawPipSize
+        : 2;
+      // Keep trailing zeroes so the last digit matches the market's pip precision.
+      const formatted = value.toFixed(decimals);
+      const fractional = formatted.includes(".") ? formatted.split(".")[1] : "";
+      const lastChar = fractional.length ? fractional[fractional.length - 1] : formatted.slice(-1);
+      const digit = Number(lastChar);
+      return Number.isInteger(digit) && digit >= 0 && digit <= 9 ? { quote: value, digit } : null;
     };
-    const appendTicks = (items: Array<{quote:number;digit:number;epoch:number}>, live:boolean) => {
-      const fresh = items.filter(item => {
-        const key = `${item.epoch}:${item.quote}`;
-        if (tickKeysRef.current.has(key)) return false;
-        tickKeysRef.current.add(key);
-        return true;
-      });
-      if (!fresh.length || cancelled) return;
-      setMarketTicks(old => [...old, ...fresh].slice(-1000));
-      if (live) setSessionTickCount(old => {
-        const next = old + fresh.length;
+
+    const receiveHistory = (message: any) => {
+      const prices: unknown[] = Array.isArray(message.history?.prices) ? message.history.prices : [];
+      const times: unknown[] = Array.isArray(message.history?.times) ? message.history.times : [];
+      const pipSize = message.pip_size ?? 2;
+      const rows = prices.map((price, index) => {
+        const parsed = parseQuote(price, pipSize);
+        const epoch = Number(times[index]);
+        return parsed && Number.isFinite(epoch) ? { ...parsed, epoch } : null;
+      }).filter((row): row is { quote: number; digit: number; epoch: number } => row !== null);
+
+      // History is a snapshot. Replace the window rather than waiting for a live tick.
+      setMarketTicks(rows.slice(-1000));
+      historyLoaded = true;
+      setMarketStatus("live");
+      setMarketError("");
+    };
+
+    const appendLiveTick = (tick: any, response: any) => {
+      const parsed = parseQuote(tick?.quote, tick?.pip_size ?? response?.pip_size);
+      const epoch = Number(tick?.epoch);
+      if (!parsed || !Number.isFinite(epoch)) return;
+
+      // Do not deduplicate by epoch+quote: fast markets can legitimately publish
+      // multiple identical quotes within one second.
+      setMarketTicks(old => [...old, { ...parsed, epoch }].slice(-1000));
+      setSessionTickCount(old => {
+        const next = old + 1;
         try { localStorage.setItem("supa-ai-session-tick-count", String(next)); } catch {}
         return next;
       });
+      setMarketStatus("live");
+      setMarketError("");
     };
+
     const scheduleReconnect = () => {
-      if (!cancelled) reconnectTimer = window.setTimeout(connect, Math.min(15000, 1500 * ++reconnectAttempts));
+      if (cancelled) return;
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      reconnectTimer = window.setTimeout(connect, Math.min(15000, 1000 * (2 ** Math.min(reconnectAttempts++, 4))));
     };
+
     const connect = () => {
       if (cancelled) return;
-      setMarketStatus("connecting"); setMarketError(""); subscribed = false;
-      try { socket = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089"); }
-      catch { setMarketStatus("error"); setMarketError("Could not open the Deriv market-data connection."); scheduleReconnect(); return; }
+      historyLoaded = false;
+      setMarketStatus("connecting");
+      setMarketError("Connecting to Deriv market data…");
+
+      try {
+        const appId = process.env.NEXT_PUBLIC_DERIV_APP_ID || "1089";
+        socket = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${encodeURIComponent(appId)}`);
+      } catch {
+        setMarketStatus("error");
+        setMarketError("Could not create the Deriv WebSocket connection.");
+        scheduleReconnect();
+        return;
+      }
+
       socket.onopen = () => {
-        if (!cancelled) socket?.send(JSON.stringify({ticks_history:marketSymbol,count:1000,end:"latest",style:"ticks",req_id:1}));
+        if (cancelled || !socket) return;
+        reconnectAttempts = 0;
+        // Request history first. Subscribe only after the snapshot arrives to avoid
+        // racing history and stream responses.
+        socket.send(JSON.stringify({
+          ticks_history: marketSymbol,
+          count: 1000,
+          end: "latest",
+          style: "ticks",
+          req_id: 1
+        }));
+        if (pingTimer) window.clearInterval(pingTimer);
+        pingTimer = window.setInterval(() => {
+          if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ ping: 1 }));
+        }, 25000);
       };
+
       socket.onmessage = event => {
         if (cancelled) return;
         let message: any;
         try { message = JSON.parse(event.data); } catch { return; }
+
         if (message.error) {
           setMarketStatus("error");
-          setMarketError(String(message.error.message || "Deriv returned a market-data error."));
+          setMarketError(`Deriv API: ${String(message.error.message || "Request failed")}`);
           return;
         }
+
         if (message.msg_type === "history" && message.history) {
-          const prices: unknown[] = Array.isArray(message.history.prices) ? message.history.prices : [];
-          const times: unknown[] = Array.isArray(message.history.times) ? message.history.times : [];
-          const pipSize = message.pip_size ?? 2;
-          const history = prices.map((price,i) => {
-            const parsed = parseQuote(price,pipSize);
-            return parsed ? {...parsed,epoch:Number(times[i]||0)} : null;
-          }).filter((item): item is {quote:number;digit:number;epoch:number} => item !== null && Number.isFinite(item.epoch));
-          tickKeysRef.current.clear(); setMarketTicks([]);
-          appendTicks(history,false);
-          if (!subscribed && socket?.readyState === WebSocket.OPEN) {
-            subscribed = true;
-            socket.send(JSON.stringify({ticks:marketSymbol,subscribe:1,req_id:2}));
+          receiveHistory(message);
+          if (socket?.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ ticks: marketSymbol, subscribe: 1, req_id: 2 }));
           }
-          setMarketStatus("live"); return;
+          return;
         }
+
         if (message.msg_type === "tick" && message.tick) {
-          const parsed = parseQuote(message.tick.quote, message.pip_size ?? message.tick.pip_size);
-          if (!parsed) return;
-          appendTicks([{...parsed,epoch:Number(message.tick.epoch||Math.floor(Date.now()/1000))}],true);
-          setMarketStatus("live");
+          appendLiveTick(message.tick, message);
+          return;
+        }
+
+        // Keep the UI informative if the server responds but does not return history.
+        if (message.msg_type === "ping") return;
+        if (!historyLoaded && message.msg_type === "active_symbols") return;
+      };
+
+      socket.onerror = () => {
+        if (!cancelled) {
+          setMarketStatus("error");
+          setMarketError("Deriv connection error. Check your internet connection or app ID; retrying automatically.");
         }
       };
-      socket.onerror = () => {
-        if (!cancelled) { setMarketStatus("error"); setMarketError("Market stream interrupted; reconnecting automatically."); }
+
+      socket.onclose = event => {
+        if (pingTimer) window.clearInterval(pingTimer);
+        if (!cancelled) {
+          setMarketStatus("connecting");
+          setMarketError(`Deriv connection closed${event.code ? ` (${event.code})` : ""}; reconnecting…`);
+          scheduleReconnect();
+        }
       };
-      socket.onclose = () => { if (!cancelled) { setMarketStatus("connecting"); scheduleReconnect(); } };
     };
+
     try {
       const saved = Number(localStorage.getItem("supa-ai-session-tick-count") || "0");
       if (Number.isFinite(saved) && saved >= 0) setSessionTickCount(saved);
     } catch {}
+
     connect();
+
     return () => {
       cancelled = true;
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
-      if (socket) { socket.onopen=null; socket.onmessage=null; socket.onerror=null; socket.onclose=null; socket.close(); }
+      if (pingTimer) window.clearInterval(pingTimer);
+      if (socket) {
+        socket.onopen = null;
+        socket.onmessage = null;
+        socket.onerror = null;
+        socket.onclose = null;
+        socket.close();
+      }
     };
   }, [marketSymbol]);
 
@@ -562,6 +637,8 @@ useEffect(() => {
         <footer className="footer"><span>SUPA AI <span className="footer-dot">•</span> TRADING INTELLIGENCE</span><span>Trade responsibly.</span></footer>
       </section>
       <style jsx global>{`
+        .market-error{color:#b42318;background:#fff1f0;border:1px solid #ffd5d2;padding:10px 12px;border-radius:10px;margin:12px 0;font-size:13px}
+
         .market-monitor-panel{padding:20px}.market-controls{display:grid;grid-template-columns:minmax(220px,2fr) repeat(3,minmax(120px,1fr));gap:14px;align-items:end;margin-bottom:22px}
         .market-controls label{display:flex;flex-direction:column;gap:8px;font-size:12px;font-weight:700}.market-controls select{min-height:42px;border:1px solid #dfe5ee;border-radius:10px;padding:0 12px;background:white;color:inherit}
         .tick-stat{display:flex;flex-direction:column;gap:7px;border:1px solid #e7ebf2;border-radius:10px;padding:10px 12px;min-height:62px;justify-content:center}.tick-stat small{font-size:10px;opacity:.65;letter-spacing:.06em}.tick-stat strong{font-size:15px;overflow-wrap:anywhere}
