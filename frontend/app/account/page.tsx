@@ -20,7 +20,6 @@ fetch("/api/auth/deriv/accounts", { cache: "no-store" })
 .then(async (response) => {
 const data = await response.json();
 
-```
     if (!response.ok) {
       throw new Error(
         data.error || "Could not load accounts."
@@ -39,7 +38,6 @@ const data = await response.json();
   .finally(() => {
     setLoading(false);
   });
-```
 
 }, []);
 
@@ -49,16 +47,13 @@ sessionStorage.setItem(
 JSON.stringify(account)
 );
 
-```
 window.location.assign("/workspace");
-```
 
 };
 
 return ( <main className="auth-page"> <section className="auth-card account-choice-card"> <div className="brand-lockup auth-brand"> <div className="brand-mark">
 S<span>+</span> </div>
 
-```
       <div>
         <div className="brand-name">
           supa<span>ai</span>
@@ -165,7 +160,6 @@ S<span>+</span> </div>
     </p>
   </section>
 </main>
-```
 
 );
 }
