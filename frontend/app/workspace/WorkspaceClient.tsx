@@ -8,6 +8,9 @@ type SelectedDerivAccount = {
   balance: number | string | null;
   isVirtual: boolean;
 };
+type ImportedBotBlock = { type: string; fields: string[]; children: number };
+type ImportedBot = { fileName: string; xml: string; blocks: ImportedBotBlock[]; importedAt: string };
+
 type Strategy = {
   id: string;
   name: string;
@@ -104,8 +107,61 @@ export default function Home({ previewMode = false }: { previewMode?: boolean })
   const [floatingDigitsOpen, setFloatingDigitsOpen] = useState(false);
   const [offlineContracts, setOfflineContracts] = useState<Array<{id:string;time:string;market:string;contract:string;result:string;mode:string;profit:string}>>([]);
   const [botName, setBotName] = useState("My first bot");
+  const [importedBot, setImportedBot] = useState<ImportedBot | null>(null);
+  const [xmlImportError, setXmlImportError] = useState("");
+  const [xmlImportBusy, setXmlImportBusy] = useState(false);
+  const xmlInputRef = useRef<HTMLInputElement | null>(null);
   const [communitySharing, setCommunitySharing] = useState(false);
   const [controlsHydrated, setControlsHydrated] = useState(false);
+
+  async function handleBotXmlUpload(file?: File) {
+    if (!file) return;
+    setXmlImportError("");
+    setXmlImportBusy(true);
+    try {
+      if (!file.name.toLowerCase().endsWith(".xml")) {
+        throw new Error("Choose a Blockly XML file with the .xml extension.");
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        throw new Error("This XML file is larger than 5 MB. Please export a smaller bot file.");
+      }
+      const xml = await file.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(xml, "application/xml");
+      if (doc.querySelector("parsererror")) throw new Error("The XML file is malformed and could not be read.");
+      const root = doc.documentElement;
+      if (!root || !["xml", "workspace"].includes(root.tagName.toLowerCase())) {
+        throw new Error("This doesn't look like a Blockly workspace XML file.");
+      }
+      const blockNodes = Array.from(doc.querySelectorAll("block, shadow"));
+      if (blockNodes.length === 0) throw new Error("No Blockly blocks were found in this XML file.");
+      const blocks = blockNodes.map((node) => ({
+        type: node.getAttribute("type") || node.tagName.toLowerCase(),
+        fields: Array.from(node.children).filter((child) => child.tagName.toLowerCase() === "field").map((field) => `${field.getAttribute("name") || "FIELD"}: ${field.textContent || ""}`),
+        children: Array.from(node.children).filter((child) => ["block", "shadow", "statement", "value", "next"].includes(child.tagName.toLowerCase())).length,
+      }));
+      setImportedBot({ fileName: file.name, xml, blocks, importedAt: new Date().toISOString() });
+      setBotName(file.name.replace(/\.xml$/i, "") || "Imported bot");
+      setBotRunning(false);
+      setNotice(`Imported ${file.name}: ${blockNodes.length} Blockly blocks loaded for review. Execution remains disabled until a compatible bot runtime is connected.`);
+    } catch (error) {
+      setXmlImportError(error instanceof Error ? error.message : "Could not import this XML file.");
+    } finally {
+      setXmlImportBusy(false);
+      if (xmlInputRef.current) xmlInputRef.current.value = "";
+    }
+  }
+
+  function downloadImportedBotXml() {
+    if (!importedBot) return;
+    const blob = new Blob([importedBot.xml], { type: "application/xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = importedBot.fileName || "supa-ai-bot.xml";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
 
   useEffect(() => {
     try {
@@ -624,10 +680,17 @@ useEffect(() => {
           {page === "history" && <section><div className="page-heading-row"><div><div className="eyebrow">CONTRACT RECORDS</div><h1>Trade History</h1><p className="subtitle">Settled real contracts and simulated virtual trades will be clearly separated.</p></div></div><div className="panel" style={{padding:20}}><h2>History status</h2><p>Broker-confirmed history will be loaded from the backend. Browser-only UI events are not presented as real contracts.</p></div></section>}
           {page === "risk" && <section><div className="page-heading-row"><div><div className="eyebrow">ACCOUNT PROTECTION</div><h1>Risk Controls</h1><p className="subtitle">Configure strategy-level limits in Strategy Builder. These frontend settings do not yet enforce broker-side controls.</p></div></div><div className="panel" style={{padding:20}}><div className="form-grid"><label>Current strategy initial stake<input readOnly value={draft.stake}/></label><label>Take profit<input readOnly value={draft.takeProfit}/></label><label>Stop loss<input readOnly value={draft.stopLoss}/></label><label>Maximum stake<input readOnly value={draft.maxStake}/></label><label>Max martingale steps<input readOnly value={draft.maxMartingaleSteps}/></label><label>Max concurrent trades<input readOnly value={draft.maxTrades}/></label></div><button className="primary-button" onClick={() => setPage("builder")}>Edit risk settings →</button></div></section>}
           {page === "bots" && <section className="bot-studio-page">
-            <div className="page-heading-row"><div><div className="eyebrow">AUTOMATION STUDIO / VISUAL BUILDER</div><h1>Deriv Bot Studio</h1><p className="subtitle">Arrange a strategy as readable blocks, then review the rules with Supa AI before any future execution integration.</p></div><span className="draft-pill">VISUAL PREVIEW · EXECUTION LOCKED</span></div>
+            <div className="page-heading-row"><div><div className="eyebrow">AUTOMATION STUDIO / VISUAL BUILDER</div><h1>Deriv Bot Studio</h1><p className="subtitle">Build a visual strategy or import a Deriv Bot Blockly XML file. Review detected blocks with Supa AI before execution is enabled.</p></div><span className="draft-pill">VISUAL PREVIEW · EXECUTION LOCKED</span></div>
             <div className="bot-studio-grid">
               <div className="bot-canvas panel">
                 <div className="bot-canvas-head"><div><span className="eyebrow">BOT WORKSPACE</span><h2>Build your bot</h2></div><span className="canvas-zoom">100%</span></div>
+                <div className="xml-import-panel">
+                  <div className="xml-import-copy"><span className="xml-file-icon">XML</span><div><b>Import your Deriv Bot</b><p>Load a Blockly <code>.xml</code> file to inspect its blocks and preserve the original workspace.</p></div></div>
+                  <input ref={xmlInputRef} className="xml-file-input" type="file" accept=".xml,application/xml,text/xml" onChange={e=>void handleBotXmlUpload(e.target.files?.[0])} aria-label="Upload Deriv Bot XML file" />
+                  <div className="xml-import-actions"><button className="primary-button" disabled={xmlImportBusy} onClick={()=>xmlInputRef.current?.click()}>{xmlImportBusy ? "Reading XML…" : "↑ Upload bot XML"}</button>{importedBot && <button className="secondary-button" onClick={downloadImportedBotXml}>Download original XML</button>}{importedBot && <button className="secondary-button" onClick={()=>{setImportedBot(null);setXmlImportError("");setNotice("Imported XML cleared from this workspace.")}}>Clear import</button>}</div>
+                  {xmlImportError && <div className="xml-import-error" role="alert">{xmlImportError}</div>}
+                  {importedBot && <div className="xml-import-success" role="status"><b>✓ {importedBot.fileName}</b><span>{importedBot.blocks.length} blocks found · imported {new Date(importedBot.importedAt).toLocaleTimeString()}</span><small>The original XML is kept unchanged in this page session. Unknown or unsupported blocks are not executed.</small></div>}
+                </div>
                 <div className="bot-name-row"><label>Bot name<input value={botName} onChange={e=>setBotName(e.target.value)} aria-label="Bot name" /></label><label>Use strategy<select value={draft.id} onChange={e=>{const found=strategies.find(x=>x.id===e.target.value);if(found)setDraft(found)}}><option value={draft.id}>{draft.name || "Current draft"}</option>{strategies.filter(x=>x.id!==draft.id).map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label></div>
                 <div className="block-workspace" aria-label="Visual strategy blocks">
                   <div className="flow-start">▶ START</div>
@@ -641,6 +704,7 @@ useEffect(() => {
                   <article className="strategy-block block-risk"><div className="block-label"><span className="block-icon">⬡</span><div><small>BLOCK 04 · RISK</small><b>Set safety limits</b></div><span className="block-menu">•••</span></div><div className="block-fields"><label>Stake<input type="number" min="0.35" step="0.01" value={draft.stake} onChange={e=>updateDraft("stake",Math.max(0.35,Number(e.target.value)))}/></label><label>Stop loss<input type="number" min="0" step="0.01" value={draft.stopLoss} onChange={e=>updateDraft("stopLoss",Math.max(0,Number(e.target.value)))}/></label><label>Take profit<input type="number" min="0" step="0.01" value={draft.takeProfit} onChange={e=>updateDraft("takeProfit",Math.max(0,Number(e.target.value)))}/></label><label>Max stake<input type="number" min="0.35" step="0.01" value={draft.maxStake} onChange={e=>updateDraft("maxStake",Math.max(0.35,Number(e.target.value)))}/></label></div></article>
                   <div className="flow-connector"></div><div className="flow-end">END · WAIT FOR NEXT TICK</div>
                 </div>
+                {importedBot && <section className="imported-blocks-panel"><div className="panel-heading"><div><h3>Imported XML block inventory</h3><p>Block types detected in the uploaded file; this is a structural preview, not a running Blockly engine.</p></div><span className="draft-pill">{importedBot.blocks.length} BLOCKS</span></div><div className="imported-block-list">{importedBot.blocks.slice(0,120).map((block,index)=><article className="imported-block-row" key={`${block.type}-${index}`}><span className="imported-block-number">{String(index+1).padStart(2,"0")}</span><div><b>{block.type}</b>{block.fields.length>0 && <small>{block.fields.slice(0,4).join(" · ")}</small>}</div><span className="imported-block-kind">{block.type.toLowerCase().includes("trade") || block.type.toLowerCase().includes("purchase") ? "TRADE" : block.type.toLowerCase().includes("contract") || block.type.toLowerCase().includes("market") ? "MARKET" : "BLOCK"}</span></article>)}{importedBot.blocks.length>120 && <p className="block-list-note">Showing the first 120 of {importedBot.blocks.length} detected blocks.</p>}</div></section>}
                 <div className="bot-canvas-actions"><button className="secondary-button" onClick={()=>setPage("builder")}>Open full strategy builder ↗</button><button className="primary-button" onClick={()=>{setReviewOpen(true);setDraft({...draft,status:"Awaiting review"});}}>Review bot rules →</button></div>
               </div>
               <aside className="bot-studio-aside">
@@ -664,6 +728,7 @@ useEffect(() => {
         <footer className="footer"><span>SUPA AI <span className="footer-dot">•</span> TRADING INTELLIGENCE</span><span>Trade responsibly.</span></footer>
       </section>
       <style jsx global>{`
+        .xml-import-panel{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center;margin:0 0 16px;padding:15px;background:#0d141b;border:1px solid #2a3a45;border-radius:12px}.xml-import-copy{display:flex;align-items:center;gap:12px;min-width:0}.xml-file-icon{display:grid;place-items:center;flex:0 0 42px;height:42px;border-radius:10px;background:#70e1bb18;border:1px solid #70e1bb50;color:#70e1bb;font-size:11px;font-weight:900}.xml-import-copy b{font-size:13px}.xml-import-copy p{margin:5px 0 0;color:#91a4af;font-size:11px;line-height:1.5}.xml-import-copy code{color:#b5ffe6}.xml-file-input{display:none}.xml-import-actions{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}.xml-import-actions button{min-height:38px}.xml-import-error{grid-column:1/-1;border:1px solid #653238;background:#321f22;color:#ffb3b3;border-radius:8px;padding:10px;font-size:12px}.xml-import-success{grid-column:1/-1;display:flex;flex-direction:column;gap:5px;padding:11px 12px;border-radius:8px;border:1px solid #286650;background:#10271f;color:#b5ffe6;font-size:12px}.xml-import-success span,.xml-import-success small{color:#91b5a8}.imported-blocks-panel{margin-top:16px;padding:16px;border:1px solid #2a3946;border-radius:12px;background:#0e151c}.imported-block-list{display:grid;gap:7px;max-height:430px;overflow:auto}.imported-block-row{display:flex;align-items:center;gap:10px;padding:10px;border:1px solid #2a3946;background:#131d26;border-radius:8px;min-width:0}.imported-block-number{font-size:10px;color:#8094a1;font-family:monospace}.imported-block-row>div{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}.imported-block-row b{font-size:11px;overflow-wrap:anywhere}.imported-block-row small{font-size:10px;color:#91a4af;overflow-wrap:anywhere}.imported-block-kind{font-size:9px;letter-spacing:.08em;color:#70e1bb;border:1px solid #355b50;padding:4px 6px;border-radius:5px}.block-list-note{font-size:11px;color:#91a4af}
         .market-error{color:#b42318;background:#fff1f0;border:1px solid #ffd5d2;padding:10px 12px;border-radius:10px;margin:12px 0;font-size:13px}
 
         .market-monitor-panel{padding:20px}.market-controls{display:grid;grid-template-columns:minmax(220px,2fr) repeat(3,minmax(120px,1fr));gap:14px;align-items:end;margin-bottom:22px}
