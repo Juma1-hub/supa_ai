@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import SupaAutoTrader from "./SupaAutoTrader";
 type SelectedDerivAccount = {
   accountId: string;
   accountType: string;
@@ -59,6 +60,7 @@ const navItems = [
   { id: "dashboard", label: "Dashboard", icon: "▦" },
   { id: "builder", label: "Strategy Builder", icon: "⌘" },
   { id: "ai-console", label: "Supa AI Console", icon: "✦" },
+  { id: "auto-trader", label: "Supa AI Auto Trader", icon: "⚡" },
   { id: "markets", label: "Market Monitor", icon: "⌁" },
   { id: "trades", label: "Active Trades", icon: "↗" },
   { id: "history", label: "Trade History", icon: "◷" },
@@ -850,6 +852,8 @@ useEffect(() => {
               </aside>
             </div>
           </section>}
+
+          {page === "auto-trader" && <SupaAutoTrader />}
 
           {page === "markets" && <section>
             <div className="page-heading-row"><div><div className="eyebrow">LIVE MARKET WORKSPACE</div><h1>Market Monitor</h1><p className="subtitle">Live digit-frequency analysis using up to the latest 1,000 ticks. Frequency history is descriptive, not predictive.</p></div><span className="draft-pill">{marketStatus.toUpperCase()}</span></div>
