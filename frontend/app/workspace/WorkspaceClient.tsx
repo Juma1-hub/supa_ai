@@ -454,6 +454,21 @@ useEffect(() => {
     return colors;
   }, [frequencies]);
 
+  const priceSeries = useMemo(() => {
+    const points = marketTicks.slice(-1000);
+    if (!points.length) return { path: "", latest: null as number | null, high: null as number | null, low: null as number | null, change: null as number | null };
+    const quotes = points.map(point => point.quote);
+    const min = Math.min(...quotes);
+    const max = Math.max(...quotes);
+    const range = max - min || 1;
+    const path = quotes.map((quote, index) => {
+      const x = points.length === 1 ? 500 : (index / (points.length - 1)) * 1000;
+      const y = 210 - ((quote - min) / range) * 180;
+      return `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+    return { path, latest: quotes[quotes.length - 1], high: max, low: min, change: quotes.length > 1 ? quotes[quotes.length - 1] - quotes[0] : 0 };
+  }, [marketTicks]);
+
   function updateDraft<K extends keyof Strategy>(key: K, value: Strategy[K]) {
     setDraft((old) => ({ ...old, [key]: value }));
   }
@@ -669,6 +684,14 @@ useEffect(() => {
               <div className="terminal-toolbar"><div className="terminal-market-title"><span className={`terminal-status ${marketStatus}`}></span><div><b>Deriv market stream</b><small>{marketStatus === "live" ? "Receiving public tick data" : marketStatus === "error" ? "Connection needs attention" : "Connecting to public market data"}</small></div></div><div className="terminal-tags"><span>PUBLIC DATA</span><span>NO ORDERS SENT</span></div></div>
               <div className="market-controls"><label>Market<select value={marketSymbol} onChange={e=>{tickKeysRef.current.clear();setMarketTicks([]);setMarketSymbol(e.target.value);}}>{marketSymbols.map(item=><option key={item.value} value={item.value}>{item.label}</option>)}</select></label><div className="tick-stat"><small>TICKS IN WINDOW</small><strong>{marketTicks.length} / 1,000</strong></div><div className="tick-stat"><small>SESSION TICK COUNT</small><strong>{sessionTickCount.toLocaleString()}</strong></div><div className="tick-stat"><small>LATEST QUOTE</small><strong>{marketTicks.length?marketTicks[marketTicks.length-1].quote:"—"}</strong></div></div>
               {marketError && <div className="market-error">{marketError}</div>}
+              <div className="price-chart-panel">
+                <div className="price-chart-heading"><div><span className="chart-overline">PRICE MOVEMENT · LAST 1,000 TICKS</span><h2>{priceSeries.latest === null ? "Waiting for quote" : priceSeries.latest}</h2><small>Live public tick quotes · chart is descriptive, not a prediction</small></div><div className={`price-change ${priceSeries.change !== null && priceSeries.change >= 0 ? "positive" : "negative"}`}>{priceSeries.change === null ? "—" : `${priceSeries.change >= 0 ? "+" : ""}${priceSeries.change.toFixed(4)}`}<small>window change</small></div></div>
+                <div className="price-chart-visual" role="img" aria-label="Line chart of the latest 1,000 received market quotes">
+                  <svg viewBox="0 0 1000 240" preserveAspectRatio="none"><defs><linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#20b981" stopOpacity=".22"/><stop offset="100%" stopColor="#20b981" stopOpacity="0"/></linearGradient></defs>{[35,80,125,170,215].map(y=><line key={y} x1="0" x2="1000" y1={y} y2={y} className="chart-grid-line"/>)}{priceSeries.path && <><path d={`${priceSeries.path} L1000,240 L0,240 Z`} fill="url(#priceFill)"/><path d={priceSeries.path} className="price-line"/></>}</svg>
+                  {!marketTicks.length && <div className="chart-waiting">The chart will draw when live ticks arrive.</div>}
+                </div>
+                <div className="price-chart-footer"><span>HIGH <b>{priceSeries.high === null ? "—" : priceSeries.high}</b></span><span>LOW <b>{priceSeries.low === null ? "—" : priceSeries.low}</b></span><span>POINTS <b>{Math.min(1000, marketTicks.length)}</b></span></div>
+              </div>
               <div className="digit-grid">{frequencies.map(f=><div className="digit-card" key={f.digit} style={{borderColor:digitColors[f.digit]||"#dfe5ee"}}><div className="digit-card-top"><span>Digit</span><b style={{color:digitColors[f.digit]||"inherit"}}>{f.digit}</b></div><strong>{f.percent.toFixed(2)}%</strong><small>{f.count} ticks</small><div className="digit-progress"><span style={{width:`${f.percent}%`,background:digitColors[f.digit]||"#8b95a7"}}/></div></div>)}</div>
               <div className="panel-heading"><div><h2>Recent ticks</h2><p>Newest first · only real received tick data is shown.</p></div></div>
               <div className="recent-ticks">{[...marketTicks].slice(-30).reverse().map((tick,i)=><div className="recent-tick" key={`${tick.epoch}-${tick.quote}-${i}`}><small>{new Date(tick.epoch*1000).toLocaleTimeString()}</small><strong>{tick.quote}</strong><span style={{background:digitColors[tick.digit]||"#8b95a7"}}>{tick.digit}</span></div>)}</div>
@@ -732,6 +755,7 @@ useEffect(() => {
         .market-error{color:#b42318;background:#fff1f0;border:1px solid #ffd5d2;padding:10px 12px;border-radius:10px;margin:12px 0;font-size:13px}
 
         .market-monitor-panel{padding:20px}.market-controls{display:grid;grid-template-columns:minmax(220px,2fr) repeat(3,minmax(120px,1fr));gap:14px;align-items:end;margin-bottom:22px}
+        .price-chart-panel{border:1px solid var(--line,#26313e);border-radius:16px;padding:18px;margin:4px 0 22px;background:linear-gradient(145deg,rgba(32,185,129,.045),rgba(20,28,40,.18))}.price-chart-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.chart-overline{font-size:10px;letter-spacing:.13em;font-weight:800;color:#8d9aaa}.price-chart-heading h2{font-size:27px;margin:8px 0 4px;font-variant-numeric:tabular-nums}.price-chart-heading small{color:var(--muted,#8d9aaa)}.price-change{font-weight:800;text-align:right;font-variant-numeric:tabular-nums}.price-change small{display:block;font-size:10px;color:var(--muted,#8d9aaa);font-weight:600;margin-top:5px}.price-change.positive{color:#20b981}.price-change.negative{color:#ef5350}.price-chart-visual{height:210px;position:relative;margin-top:12px;overflow:hidden}.price-chart-visual svg{width:100%;height:100%;overflow:visible}.chart-grid-line{stroke:rgba(140,155,175,.16);stroke-width:1;stroke-dasharray:4 6}.price-line{fill:none;stroke:#20b981;stroke-width:3;vector-effect:non-scaling-stroke;stroke-linecap:round;stroke-linejoin:round}.chart-waiting{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted,#8d9aaa);font-size:13px}.price-chart-footer{display:flex;gap:26px;flex-wrap:wrap;border-top:1px solid var(--line,#26313e);padding-top:12px;color:var(--muted,#8d9aaa);font-size:10px;letter-spacing:.08em}.price-chart-footer b{display:block;color:var(--text,#edf2f7);font-size:13px;letter-spacing:0;margin-top:5px;font-variant-numeric:tabular-nums}
         .market-controls label{display:flex;flex-direction:column;gap:8px;font-size:12px;font-weight:700}.market-controls select{min-height:42px;border:1px solid #dfe5ee;border-radius:10px;padding:0 12px;background:white;color:inherit}
         .tick-stat{display:flex;flex-direction:column;gap:7px;border:1px solid #e7ebf2;border-radius:10px;padding:10px 12px;min-height:62px;justify-content:center}.tick-stat small{font-size:10px;opacity:.65;letter-spacing:.06em}.tick-stat strong{font-size:15px;overflow-wrap:anywhere}
         .digit-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:16px 0 26px}.digit-card{border:1px solid;border-radius:12px;padding:13px;min-width:0}.digit-card-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
