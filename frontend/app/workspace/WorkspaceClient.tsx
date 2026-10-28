@@ -93,6 +93,10 @@ export default function Home({ previewMode = false }: { previewMode?: boolean })
   const [marketTicks, setMarketTicks] = useState<Array<{quote:number; digit:number; epoch:number}>>([]);
   const [marketStatus, setMarketStatus] = useState<"connecting"|"live"|"error">("connecting");
   const [marketError, setMarketError] = useState("");
+  type MarketScanResult = { symbol: string; label: string; sampleSize: number; oddPercent: number; evenPercent: number; qualifyingDigits: number; score: number; eligible: boolean; note: string };
+  const [marketScanResults, setMarketScanResults] = useState<MarketScanResult[]>([]);
+  const [marketScanStatus, setMarketScanStatus] = useState<"idle"|"scanning"|"complete"|"error">("idle");
+  const [marketScanMessage, setMarketScanMessage] = useState("");
   const [sessionTickCount, setSessionTickCount] = useState(0);
   const tickKeysRef = useRef<Set<string>>(new Set());
   const marketSymbols = [
@@ -530,6 +534,112 @@ useEffect(() => {
     setDraft(old => ({ ...old, instructions: raw, market: marketMatch?.label || old.market, contract: contract === "Not specified" ? old.contract : contract as Strategy["contract"], stake: stakeMatch ? Number(stakeMatch[1]) : old.stake, frequencyWindow: window, martingaleMultiplier: martingale === false ? 1 : old.martingaleMultiplier, maxMartingaleSteps: martingale === false ? 0 : old.maxMartingaleSteps, status: "Awaiting review" }));
   }
 
+  async function scanMarketsForStrategy() {
+    if (marketScanStatus === "scanning") return;
+    setMarketScanStatus("scanning");
+    setMarketScanMessage("Requesting up to 1,000 recent ticks from each supported volatility market…");
+    setMarketScanResults([]);
+
+    const candidates = marketSymbols.filter(item => /^(R_|1HZ|JD)/.test(item.value));
+    const reqToMarket = new Map<number, typeof candidates[number]>();
+    candidates.forEach((market, index) => reqToMarket.set(index + 100, market));
+
+    await new Promise<void>((resolve) => {
+      let socket: WebSocket | null = null;
+      let finished = false;
+      const results: MarketScanResult[] = [];
+      const timer = window.setTimeout(() => {
+        finish("Some markets did not respond before the scan timed out.", true);
+      }, 30000);
+
+      const finish = (message: string, error = false) => {
+        if (finished) return;
+        finished = true;
+        window.clearTimeout(timer);
+        try { socket?.close(); } catch {}
+        setMarketScanResults(results.sort((a,b) => b.score - a.score || b.sampleSize - a.sampleSize));
+        setMarketScanStatus(error && results.length === 0 ? "error" : "complete");
+        setMarketScanMessage(results.length
+          ? `${results.length} markets analyzed. Scores reflect the current rule fit, not a prediction of future prices or profitability.`
+          : message);
+        resolve();
+      };
+
+      try {
+        socket = new WebSocket("wss://api.derivws.com/trading/v1/options/ws/public");
+      } catch {
+        finish("Could not open the public market-data connection.", true);
+        return;
+      }
+
+      socket.onopen = () => {
+        reqToMarket.forEach((market, reqId) => {
+          socket?.send(JSON.stringify({
+            ticks_history: market.value,
+            count: 1000,
+            end: "latest",
+            style: "ticks",
+            req_id: reqId
+          }));
+        });
+      };
+
+      socket.onmessage = event => {
+        if (finished) return;
+        let message: any;
+        try { message = JSON.parse(event.data); } catch { return; }
+        const reqId = Number(message.req_id);
+        const market = reqToMarket.get(reqId);
+        if (!market) return;
+
+        if (message.error) {
+          results.push({
+            symbol: market.value, label: market.label, sampleSize: 0,
+            oddPercent: 0, evenPercent: 0, qualifyingDigits: 0, score: 0,
+            eligible: false, note: String(message.error.message || "Market data unavailable")
+          });
+        } else if (message.history && Array.isArray(message.history.prices)) {
+          const pipSize = Number.isInteger(Number(message.pip_size)) ? Number(message.pip_size) : 2;
+          const digits = message.history.prices.map((price: unknown) => {
+            const value = Number(price);
+            if (!Number.isFinite(value)) return null;
+            const formatted = value.toFixed(Math.max(0, Math.min(10, pipSize)));
+            const fraction = formatted.includes(".") ? formatted.split(".")[1] : "";
+            const digit = Number(fraction.length ? fraction.slice(-1) : formatted.slice(-1));
+            return Number.isInteger(digit) && digit >= 0 && digit <= 9 ? digit : null;
+          }).filter((digit: number | null): digit is number => digit !== null).slice(-1000);
+
+          const sampleSize = digits.length;
+          const oddPercent = sampleSize ? digits.filter((digit: number) => digit % 2 === 1).length / sampleSize * 100 : 0;
+          const evenPercent = sampleSize ? 100 - oddPercent : 0;
+          const counts = Array(10).fill(0) as number[];
+          digits.forEach((digit: number) => counts[digit]++);
+          const targetDigits = counts.map((count, digit) => ({
+            digit,
+            percent: sampleSize ? count / sampleSize * 100 : 0,
+            matchesParity: draft.contract === "ODD" ? digit % 2 === 1 : digit % 2 === 0
+          })).filter(item => item.matchesParity);
+          const qualifyingDigits = targetDigits.filter(item => item.percent >= draft.threshold).length;
+          const requiredWindow = Math.max(10, Math.min(1000, draft.frequencyWindow));
+          const enoughData = sampleSize >= requiredWindow;
+          const eligible = enoughData && qualifyingDigits >= Math.max(1, draft.qualifyingDigits);
+          const distance = Math.abs((draft.contract === "ODD" ? oddPercent : evenPercent) - 50);
+          const score = enoughData ? Math.max(0, Math.min(100, 70 + qualifyingDigits * 5 - distance * 2)) : 0;
+          results.push({
+            symbol: market.value, label: market.label, sampleSize, oddPercent, evenPercent,
+            qualifyingDigits, score: Math.round(score), eligible,
+            note: !enoughData ? `Need ${requiredWindow} ticks; received ${sampleSize}.` :
+              eligible ? `${qualifyingDigits} ${draft.contract.toLowerCase()} digits meet the ${draft.threshold}% threshold.` :
+              `Only ${qualifyingDigits} ${draft.contract.toLowerCase()} digits meet the ${draft.threshold}% threshold; ${Math.max(1, draft.qualifyingDigits)} required.`
+          });
+        }
+
+        if (results.length >= candidates.length) finish("Market scan completed.");
+      };
+      socket.onerror = () => finish("Market-data connection failed. Check the public feed and try again.", true);
+    });
+  }
+
   function saveStrategy(activate = false) {
     const saved: Strategy = {
       ...draft,
@@ -746,6 +856,12 @@ useEffect(() => {
             <div className="panel market-monitor-panel terminal-panel">
               <div className="terminal-toolbar"><div className="terminal-market-title"><span className={`terminal-status ${marketStatus}`}></span><div><b>Deriv market stream</b><small>{marketStatus === "live" ? "Receiving public tick data" : marketStatus === "error" ? "Connection needs attention" : "Connecting to public market data"}</small></div></div><div className="terminal-tags"><span>PUBLIC DATA</span><span>NO ORDERS SENT</span></div></div>
               <div className="market-controls"><label>Market<select value={marketSymbol} onChange={e=>{tickKeysRef.current.clear();setMarketTicks([]);setMarketSymbol(e.target.value);}}>{marketSymbols.map(item=><option key={item.value} value={item.value}>{item.label}</option>)}</select></label><div className="tick-stat"><small>TICKS IN WINDOW</small><strong>{marketTicks.length} / 1,000</strong></div><div className="tick-stat"><small>SESSION TICK COUNT</small><strong>{sessionTickCount.toLocaleString()}</strong></div><div className="tick-stat"><small>LATEST QUOTE</small><strong>{marketTicks.length?marketTicks[marketTicks.length-1].quote:"—"}</strong></div></div>
+              <div className="panel market-scan-panel" style={{margin:"16px 0",padding:16}}>
+                <div className="panel-heading"><div><h2>Automatic Market Selector</h2><p>Compare supported markets against the current strategy's digit-frequency conditions.</p></div><button className="primary-button" onClick={scanMarketsForStrategy} disabled={marketScanStatus==="scanning"}>{marketScanStatus==="scanning" ? "Scanning markets…" : "Scan markets"}</button></div>
+                <div className="helper-box"><span>✦</span><p>This scanner ranks current historical rule fit using up to 1,000 ticks per market. It does not predict the next tick or place orders. Unrecognized or complex instructions still require explicit strategy rules.</p></div>
+                {marketScanMessage && <p role="status" style={{fontSize:13,margin:"10px 0"}}>{marketScanMessage}</p>}
+                {marketScanResults.length > 0 && <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}><thead><tr>{["Market","Ticks","ODD %","EVEN %","Qualifying digits","Rule fit","Status","Action"].map(h=><th key={h} style={{textAlign:"left",padding:"10px 8px",borderBottom:"1px solid var(--border, #263449)",whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead><tbody>{marketScanResults.map(result=><tr key={result.symbol}><td style={{padding:"10px 8px",borderBottom:"1px solid var(--border, #263449)"}}><b>{result.label}</b><small style={{display:"block",opacity:.7}}>{result.symbol}</small></td><td style={{padding:"10px 8px",borderBottom:"1px solid var(--border, #263449)"}}>{result.sampleSize}</td><td style={{padding:"10px 8px",borderBottom:"1px solid var(--border, #263449)"}}>{result.sampleSize ? result.oddPercent.toFixed(1)+"%" : "—"}</td><td style={{padding:"10px 8px",borderBottom:"1px solid var(--border, #263449)"}}>{result.sampleSize ? result.evenPercent.toFixed(1)+"%" : "—"}</td><td style={{padding:"10px 8px",borderBottom:"1px solid var(--border, #263449)"}}>{result.qualifyingDigits}</td><td style={{padding:"10px 8px",borderBottom:"1px solid var(--border, #263449)"}}>{result.score}/100</td><td style={{padding:"10px 8px",borderBottom:"1px solid var(--border, #263449)"}}><span className={`strategy-status ${result.eligible ? "monitoring" : "paused"}`}>{result.eligible ? "Meets measured rules" : "Does not qualify"}</span><small style={{display:"block",maxWidth:230,opacity:.7,marginTop:4}}>{result.note}</small></td><td style={{padding:"10px 8px",borderBottom:"1px solid var(--border, #263449)"}}><button className="row-action" disabled={!result.eligible} onClick={()=>{setMarketSymbol(result.symbol);setMarketScanMessage(`${result.label} selected for monitoring. No trade has been placed.`);setNotice(`${result.label} selected based on the current rule-fit scan. This is not a trade signal.`);}}>Monitor</button></td></tr>)}</tbody></table></div>}
+              </div>
               {marketError && <div className="market-error">{marketError}</div>}
               <div className="price-chart-panel">
                 <div className="price-chart-heading"><div><span className="chart-overline">PRICE MOVEMENT · LAST 1,000 TICKS</span><h2>{priceSeries.latest === null ? "Waiting for quote" : priceSeries.latest}</h2><small>Live public tick quotes · chart is descriptive, not a prediction</small></div><div className={`price-change ${priceSeries.change !== null && priceSeries.change >= 0 ? "positive" : "negative"}`}>{priceSeries.change === null ? "—" : `${priceSeries.change >= 0 ? "+" : ""}${priceSeries.change.toFixed(4)}`}<small>window change</small></div></div>
