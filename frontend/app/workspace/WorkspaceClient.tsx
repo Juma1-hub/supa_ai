@@ -58,6 +58,7 @@ const initialStrategy: Strategy = {
 const navItems = [
   { id: "dashboard", label: "Dashboard", icon: "▦" },
   { id: "builder", label: "Strategy Builder", icon: "⌘" },
+  { id: "ai-console", label: "Supa AI Console", icon: "✦" },
   { id: "markets", label: "Market Monitor", icon: "⌁" },
   { id: "trades", label: "Active Trades", icon: "↗" },
   { id: "history", label: "Trade History", icon: "◷" },
@@ -83,6 +84,8 @@ export default function Home({ previewMode = false }: { previewMode?: boolean })
   const [selectedAccount, setSelectedAccount] =
   useState<SelectedDerivAccount | null>(null);
   const [draft, setDraft] = useState<Strategy>(initialStrategy);
+  const [aiInstructionText, setAiInstructionText] = useState(initialStrategy.instructions);
+  const [aiInterpretation, setAiInterpretation] = useState<{market:string; contract:string; stake:number|null; window:number; martingale:boolean|null; maxLossStreak:number|null; entryRule:string|null; warnings:string[]; ready:boolean} | null>(null);
   const [mode, setMode] = useState<"ai" | "manual">("ai");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [notice, setNotice] = useState("");
@@ -489,6 +492,44 @@ useEffect(() => {
     setNotice("Review the interpreted rules carefully before saving.");
   }
 
+  function interpretTraderInstructions() {
+    const raw = aiInstructionText.trim();
+    const text = raw.toLowerCase();
+    const warnings: string[] = [];
+    if (!raw) {
+      setAiInterpretation({ market: "Not specified", contract: "Not specified", stake: null, window: 1000, martingale: null, maxLossStreak: null, entryRule: null, warnings: ["Enter instructions first."], ready: false });
+      return;
+    }
+    const marketMatch = marketSymbols.find(m => text.includes(m.label.toLowerCase()) || text.includes(m.value.toLowerCase()));
+    const stakeMatch = text.match(/(?:stake|bet|amount)\s*(?:of|is|=|:)?\s*[$€£]?\s*(\d+(?:\.\d+)?)/i);
+    const tickMatch = text.match(/(?:last|latest|previous|past|use)\s+(\d{1,5})\s+ticks?/i);
+    const lossMatch = text.match(/(?:stop|pause|halt|quit)[^.!\n]{0,40}?(?:after|at)\s+(\d+)\s+consecutive\s+loss(?:es)?/i);
+    const contract = /\b(even)\b/.test(text) ? "EVEN" : /\b(odd)\b/.test(text) ? "ODD" : "Not specified";
+    const martingale = /no martingale|never (?:increase|raise) (?:the )?stake|do not (?:increase|raise) (?:the )?stake|don't (?:increase|raise) (?:the )?stake/i.test(raw) ? false : /martingale\s*(?:on|enabled|yes)/i.test(raw) ? true : null;
+    const entryRule = /\b(odd|even)\b/.test(text) && /(when|if|after|following|consecutive|digit|frequency|trigger)/.test(text) ? raw : null;
+    if (!marketMatch) warnings.push("Market not confidently identified. Select the market explicitly.");
+    if (!stakeMatch) warnings.push("Stake not found. Set it in the strategy settings before trading.");
+    if (contract === "Not specified") warnings.push("Contract type not identified (for example, ODD or EVEN).");
+    if (!entryRule) warnings.push("Entry trigger is ambiguous. Describe the exact condition that must be true before a trade.");
+    if (martingale === null) warnings.push("Martingale preference not specified. Explicitly say whether it is allowed; default should remain off.");
+    if (!lossMatch) warnings.push("No consecutive-loss stop rule found. Configure a stop condition in Risk Controls.");
+    const window = tickMatch ? Math.max(10, Math.min(1000, Number(tickMatch[1]))) : 1000;
+    if (tickMatch && Number(tickMatch[1]) > 1000) warnings.push("Market Monitor currently retains at most 1,000 ticks, so the requested window was capped at 1,000.");
+    setAiInterpretation({
+      market: marketMatch?.label || "Not specified",
+      contract,
+      stake: stakeMatch ? Number(stakeMatch[1]) : null,
+      window,
+      martingale,
+      maxLossStreak: lossMatch ? Number(lossMatch[1]) : null,
+      entryRule,
+      warnings,
+      ready: Boolean(marketMatch && stakeMatch && contract !== "Not specified" && entryRule && martingale === false && lossMatch)
+    });
+    if (marketMatch) setMarketSymbol(marketMatch.value);
+    setDraft(old => ({ ...old, instructions: raw, market: marketMatch?.label || old.market, contract: contract === "Not specified" ? old.contract : contract as Strategy["contract"], stake: stakeMatch ? Number(stakeMatch[1]) : old.stake, frequencyWindow: window, martingaleMultiplier: martingale === false ? 1 : old.martingaleMultiplier, maxMartingaleSteps: martingale === false ? 0 : old.maxMartingaleSteps, status: "Awaiting review" }));
+  }
+
   function saveStrategy(activate = false) {
     const saved: Strategy = {
       ...draft,
@@ -657,6 +698,28 @@ useEffect(() => {
               </section>
             </div>
           </>}
+
+          {page === "ai-console" && <section className="builder-page">
+            <div className="page-heading-row"><div><div className="eyebrow">NATURAL LANGUAGE · STRATEGY INTERPRETER</div><h1>Supa AI Console</h1><p className="subtitle">Describe your trading plan in plain language. Supa AI converts recognizable instructions into a reviewable draft; it does not place orders.</p></div><span className="draft-pill">INTERPRETER V1 · REVIEW ONLY</span></div>
+            <div className="builder-layout">
+              <div className="builder-main panel">
+                <div className="step-header"><span className="step-number">01</span><div><h2>Tell Supa AI what to do</h2><p>Be specific about market, contract, entry condition, stake, and when to stop.</p></div></div>
+                <label className="field-label" htmlFor="supa-ai-instructions">TRADER INSTRUCTIONS</label>
+                <textarea id="supa-ai-instructions" className="instruction-input large" value={aiInstructionText} onChange={e=>setAiInstructionText(e.target.value)} placeholder="Example: Trade Volatility 10 Index, use a stake of $0.50, analyze the last 1,000 ticks, enter an ODD contract only after [precise condition], never increase stake after a loss, and stop after 3 consecutive losses." />
+                <div className="helper-box"><span>✦</span><p><b>How this version works:</b> This is a transparent pattern-based interpreter, not a connected general-purpose AI model. It extracts only supported details and flags anything it cannot reliably understand.</p></div>
+                <div className="quick-actions"><button className="secondary-button" onClick={()=>setAiInstructionText("Trade Volatility 10 Index. Use a stake of $0.50. Analyze the last 1,000 ticks. Enter an ODD contract only when my exact entry condition is met: [describe the condition]. Never increase the stake after a loss (no martingale). Stop after 3 consecutive losses.")}>Use example template</button><button className="primary-button" onClick={interpretTraderInstructions}>Interpret instructions →</button></div>
+                {aiInterpretation && <div className="panel" style={{padding:16,marginTop:20}}>
+                  <div className="panel-heading"><div><h2>Interpreted strategy</h2><p>Check every field before using this draft.</p></div><span className={`draft-pill ${aiInterpretation.ready?"":""}`}>{aiInterpretation.ready?"REVIEWABLE":"NEEDS CLARIFICATION"}</span></div>
+                  <div className="form-grid"><label>Market<input readOnly value={aiInterpretation.market}/></label><label>Contract<input readOnly value={aiInterpretation.contract}/></label><label>Stake<input readOnly value={aiInterpretation.stake===null?"Not found":String(aiInterpretation.stake)}/></label><label>Tick window<input readOnly value={`${aiInterpretation.window} ticks`}/></label><label>Martingale<input readOnly value={aiInterpretation.martingale===null?"Not specified":aiInterpretation.martingale?"Requested ON":"OFF"}/></label><label>Stop after losses<input readOnly value={aiInterpretation.maxLossStreak===null?"Not specified":`${aiInterpretation.maxLossStreak} consecutive losses`}/></label></div>
+                  <div style={{marginTop:14}}><b>Entry instruction</b><p style={{marginTop:6,opacity:.82}}>{aiInterpretation.entryRule || "Not understood — describe an exact, testable trigger."}</p></div>
+                  {aiInterpretation.warnings.length>0 && <div className="xml-import-error" style={{marginTop:14}}><b>Needs attention</b><ul style={{margin:"8px 0 0",paddingLeft:20}}>{aiInterpretation.warnings.map((warning,i)=><li key={i}>{warning}</li>)}</ul></div>}
+                  <div className="quick-actions"><button className="secondary-button" onClick={()=>{setDraft(old=>({...old,instructions:aiInstructionText,status:"Awaiting review"}));setPage("builder");setNotice("Instructions copied to Strategy Builder. Review every field before saving.")}}>Open in Strategy Builder</button><button className="primary-button" onClick={()=>{setDraft(old=>({...old,instructions:aiInstructionText,status:"Awaiting review"}));setReviewOpen(true);setNotice("Strategy draft sent for review only. No trade was placed.")}}>Review strategy draft →</button></div>
+                  <small className="bot-disclaimer">No order is sent from this console. Even when all fields are recognized, the strategy still requires human review, rule validation, and a tested execution engine.</small>
+                </div>}
+              </div>
+              <aside className="builder-side"><div className="panel checklist-panel"><h3>Supported in interpreter v1</h3><div className="check-row"><span className="check-pending">1</span><div><b>Market name or symbol</b><small>Matches known market options</small></div></div><div className="check-row"><span className="check-pending">2</span><div><b>Stake amount</b><small>Reads explicit amount</small></div></div><div className="check-row"><span className="check-pending">3</span><div><b>Tick window</b><small>Capped to available 1,000 ticks</small></div></div><div className="check-row"><span className="check-pending">4</span><div><b>Contract and stop rule</b><small>Flags missing or ambiguous instructions</small></div></div></div><div className="panel side-note"><div className="note-icon">◇</div><h3>Execution is separate</h3><p>This console prepares a draft only. Real-account order execution is not activated by interpreting instructions.</p><span className="safe-label">NO ORDERS SENT</span></div></aside>
+            </div>
+          </section>}
 
           {page === "builder" && <section className="builder-page">
             <div className="page-heading-row"><div><div className="eyebrow">STRATEGY STUDIO / RULE EDITOR</div><h1>Strategy Builder</h1><p className="subtitle">Describe your idea, fine-tune the rules, and review everything before activation.</p></div><span className="draft-pill">● {draft.status.toUpperCase()}</span></div>
