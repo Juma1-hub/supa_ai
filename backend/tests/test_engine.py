@@ -52,7 +52,7 @@ def test_stats_reject_even_digit_at_ten_percent():
     engine = StrategyEngine(StrategyConfig())
     decision = engine.update_stats(
         make_stats(percentages),
-        now=datetime.now(timezone.utc).timestamp(),
+        now=datetime.now(timezone.utc),
     )
 
     assert not decision.qualifies
@@ -66,7 +66,7 @@ def test_stats_require_three_qualifying_odd_digits():
     engine = StrategyEngine(StrategyConfig())
     decision = engine.update_stats(
         make_stats(percentages),
-        now=datetime.now(timezone.utc).timestamp(),
+        now=datetime.now(timezone.utc),
     )
 
     assert not decision.qualifies
@@ -76,7 +76,7 @@ def test_qualifying_stats_are_accepted():
     engine = StrategyEngine(StrategyConfig())
     decision = engine.update_stats(
         make_stats(),
-        now=datetime.now(timezone.utc).timestamp(),
+        now=datetime.now(timezone.utc),
     )
 
     assert decision.qualifies
