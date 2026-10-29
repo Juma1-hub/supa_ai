@@ -676,7 +676,6 @@ useEffect(() => {
     setNotice("Strategy status updated.");
   }
 
-
   const pageTitle = navItems.find((n) => n.id === page)?.label || "Dashboard";
 
   return (
