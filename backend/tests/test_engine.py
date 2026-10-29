@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import pytest
 
 from supa_ai_engine.engine import (
@@ -7,19 +9,7 @@ from supa_ai_engine.engine import (
 )
 
 
-def make_stats(percentages, timestamp=1000.0):
-    return DerivDigitStats(
-        market="R_100",
-        percentages=percentages,
-        timestamp=timestamp,
-        source="deriv",
-        source_reference="test-fixture",
-    )
-
-
 def qualifying_percentages():
-    # Every even digit is below 10%.
-    # At least three odd digits are 10.5% or higher.
     return {
         0: 9.0,
         1: 11.0,
@@ -34,20 +24,25 @@ def qualifying_percentages():
     }
 
 
-def test_stats_reject_non_deriv_source():
-    stats = DerivDigitStats(
+def make_stats(percentages=None, source="deriv"):
+    return DerivDigitStats(
         market="R_100",
-        percentages=qualifying_percentages(),
-        timestamp=1000.0,
-        source="local",
+        percentages=(
+            qualifying_percentages()
+            if percentages is None
+            else percentages
+        ),
+        observed_at=datetime.now(timezone.utc),
+        source=source,
         source_reference="test-fixture",
     )
 
-    engine = StrategyEngine(StrategyConfig())
 
-    decision = engine.update_stats(stats, now=1000.0)
+def test_stats_reject_non_deriv_source():
+    stats = make_stats(source="local")
 
-    assert not decision.qualifies
+    with pytest.raises(ValueError, match="not explicitly sourced from Deriv"):
+        stats.validate()
 
 
 def test_stats_reject_even_digit_at_ten_percent():
@@ -57,7 +52,7 @@ def test_stats_reject_even_digit_at_ten_percent():
     engine = StrategyEngine(StrategyConfig())
     decision = engine.update_stats(
         make_stats(percentages),
-        now=1000.0,
+        now=datetime.now(timezone.utc).timestamp(),
     )
 
     assert not decision.qualifies
@@ -65,13 +60,13 @@ def test_stats_reject_even_digit_at_ten_percent():
 
 def test_stats_require_three_qualifying_odd_digits():
     percentages = qualifying_percentages()
-    percentages[5] = 10.4
-    percentages[9] = 10.4
+    percentages[1] = 10.4
+    percentages[3] = 10.4
 
     engine = StrategyEngine(StrategyConfig())
     decision = engine.update_stats(
         make_stats(percentages),
-        now=1000.0,
+        now=datetime.now(timezone.utc).timestamp(),
     )
 
     assert not decision.qualifies
@@ -79,10 +74,9 @@ def test_stats_require_three_qualifying_odd_digits():
 
 def test_qualifying_stats_are_accepted():
     engine = StrategyEngine(StrategyConfig())
-
     decision = engine.update_stats(
-        make_stats(qualifying_percentages()),
-        now=1000.0,
+        make_stats(),
+        now=datetime.now(timezone.utc).timestamp(),
     )
 
     assert decision.qualifies
