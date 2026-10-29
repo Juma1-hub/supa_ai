@@ -37,7 +37,7 @@ class MarketStatsRequest(BaseModel):
 def get_engine_status() -> dict:
     return {
         "trading_enabled": False,
-        "offline_mode": engine.offline_mode,
+        "offline_mode": engine.offline_trading_enabled,
         "markets": [],
         "note": (
             "Strategy engine status only. No Deriv orders are placed. "
