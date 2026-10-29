@@ -3,6 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
 from .strategy_rules import digit_frequency, last_digit_from_quote
 
+from .strategy_engine_api import (
+    get_engine_status,
+    validate_market_stats,
+    MarketStatsRequest,
+)
+
 app = FastAPI(
     title="Supa AI API",
     description="Development API for a Deriv-focused digit strategy platform.",
@@ -58,3 +64,20 @@ def extract_last_digit(request: QuoteDigitRequest):
     except ValueError as exc:
         return {"valid": False, "error": str(exc)}
     return {"valid": True, "quote": request.quote, "last_digit": digit}
+
+@app.get("/strategy/status")
+def strategy_status():
+    return get_engine_status()
+
+
+@app.post("/strategy/validate-stats")
+def strategy_validate_stats(request: MarketStatsRequest):
+    try:
+        return validate_market_stats(request)
+    except ValueError as exc:
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc
