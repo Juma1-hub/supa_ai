@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
-from ..supa_ai_engine.engine import (
+from supa_ai_engine.engine import (
     DerivDigitStats,
     StrategyConfig,
     StrategyEngine,
