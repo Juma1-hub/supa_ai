@@ -1,21 +1,30 @@
-from fastapi import FastAPI
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
-from .strategy_rules import digit_frequency, last_digit_from_quote
 
+from .strategy_rules import digit_frequency, last_digit_from_quote
 from .strategy_engine_api import (
     get_engine_status,
+    get_engine_snapshot,
     validate_market_stats,
     MarketStatsRequest,
+    engine,
 )
+from .deriv_market_data import DerivMarketDataCollector
+
+
+collector = DerivMarketDataCollector(engine, window_size=100)
+
 
 app = FastAPI(
     title="Supa AI API",
     description="Development API for a Deriv-focused digit strategy platform.",
-    version="0.1.0",
+    version="0.2.0",
 )
 
-# Development-only CORS. Restrict origins before production deployment.
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,6 +32,7 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
 
 class FrequencyRequest(BaseModel):
     digits: list[int] = Field(min_length=1, max_length=10000)
@@ -33,8 +43,10 @@ class FrequencyRequest(BaseModel):
             raise ValueError("Every item must be a digit from 0 to 9.")
         return self
 
+
 class QuoteDigitRequest(BaseModel):
     quote: str = Field(min_length=1, max_length=100)
+
 
 @app.get("/")
 def root():
@@ -42,12 +54,14 @@ def root():
         "name": "Supa AI API",
         "status": "development",
         "trading_enabled": False,
-        "message": "Development-only API. No Deriv trades are placed.",
+        "message": "Read-only Deriv market-data integration. No orders are placed.",
     }
+
 
 @app.get("/health")
 def health():
     return {"status": "ok", "environment": "development", "trading_enabled": False}
+
 
 @app.post("/tools/digit-frequency")
 def calculate_frequency(request: FrequencyRequest):
@@ -57,6 +71,7 @@ def calculate_frequency(request: FrequencyRequest):
         "note": "Historical frequencies are observations, not predictions.",
     }
 
+
 @app.post("/tools/last-digit")
 def extract_last_digit(request: QuoteDigitRequest):
     try:
@@ -65,9 +80,15 @@ def extract_last_digit(request: QuoteDigitRequest):
         return {"valid": False, "error": str(exc)}
     return {"valid": True, "quote": request.quote, "last_digit": digit}
 
+
 @app.get("/strategy/status")
 def strategy_status():
     return get_engine_status()
+
+
+@app.get("/strategy/snapshot")
+def strategy_snapshot():
+    return get_engine_snapshot()
 
 
 @app.post("/strategy/validate-stats")
@@ -75,9 +96,23 @@ def strategy_validate_stats(request: MarketStatsRequest):
     try:
         return validate_market_stats(request)
     except ValueError as exc:
-        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        raise HTTPException(
-            status_code=422,
-            detail=str(exc),
-        ) from exc
+
+@app.post("/market-data/start")
+async def start_market_data():
+    """Start public read-only subscriptions for the supported volatility indices."""
+    try:
+        return await collector.start()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/market-data/stop")
+async def stop_market_data():
+    return await collector.stop()
+
+
+@app.get("/market-data/status")
+def market_data_status():
+    return collector.snapshot()
