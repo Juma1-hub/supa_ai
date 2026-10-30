@@ -1,0 +1,97 @@
+ó
+
+    ˆåjß  ã                  ó¢   • S r SSKJr  SSKrSSKrSSKrSSKrSSKJrJ	r	  SSK
+J
+r
+Jr  SSKJ
+r
+Jr  SSKJr  SSKrSr1 S	krS
+S
+ jr " S S5      rg)z³Read-only Deriv public market-data collector.
+
+Connects to Deriv's unauthenticated public WebSocket. It never sends
+proposal, buy, sell, or other account-scoped trading requests.
+é    )ÚannotationsN)ÚCounterÚdeque)ÚdatetimeÚtimezone)ÚDecimalÚInvalidOperation)ÚAnyz2wss://api.derivws.com/trading/v1/options/ws/public>
+   ÚR_10ÚR_25ÚR_50ÚR_75ÚR_100Ú1HZ10VÚ1HZ25VÚ1HZ50VÚ1HZ75VÚ1HZ100Vc                óœ  • [        U[        5      (       a  SUs=::  a  S::  d
+  O  [        S5      e [        [	        U 5      5      nUR                  5       (       d  [        S5      eUSU S3 n[        R                  " S	S
+U5      nU(       d  [        S5      e[        US   5      $ ! [
+        [        [        4 a  n[        S5      UeSnAff = f)
+z>Extract the last displayed decimal digit using Deriv pip_size.r   é
+   zInvalid Deriv pip_sizezInvalid tick quoteNzTick quote must be finiteÚ.Úfz\DÚ zTick quote contains no digitséÿÿÿÿ)
+Ú
+isinstanceÚintÚ
+ValueErrorr   Ústrr	   Ú	TypeErrorÚ	is_finiteÚreÚsub)ÚquoteÚpip_sizeÚvalueÚexcÚrenderedÚdigitss         ÚE/mnt/data/supa_ai_market_data_update/backend/app/deriv_market_data.pyÚlast_digit_from_tickr*      s½   € äh¤×$Ñ$¨A°Õ,?¸RÕ,?ÜÐ1Ó2Ð2ð8Üœ˜E›
+Ó#ˆð ?‰?×ÑÜÐ4Ó5Ð5Ø˜˜(˜ 1}Ð%€HÜ
+VŠVE˜2˜xÓ
+(€FÞÜÐ8Ó9Ð9Üˆvb‰z‹?Ðøô 
+œj¬)Ð4ó 8ÜÐ-Ó.°CÐ7ûð8ús   ±B% Â%CÂ:CÃCc                  óT   • \ rS rSrSrS
+SS jjrSS jrS rS rS r	S r
+S	 rS
+ rSr
+g)ÚDerivMarketDataCollectoré-   z?One-process collector. Start/stop it through the API endpoints.c                ó  • US:  d  US:”  a  [        S5      eXl        X l        S U l        [        R
+                  " 5       U l        SU l        S U l        S U l	        S U l
+        0 U l        0 U l        [        5       U l        SU l        g )Nr   i'  z(window_size must be between 10 and 10000Ústoppedé   )r   ÚengineÚwindow_sizeÚtaskÚasyncioÚEventÚ
+stop_eventÚstatusÚ
+last_errorÚconnected_atÚlast_tick_atÚsymbolsÚbuffersr   Útick_countsÚ_req_id)Úselfr1   r2   s      r)   Ú__init__Ú!DerivMarketDataCollector.__init__0   sy   € Ø˜Ó˜{¨UÓ2ÜÐGÓHÐHØŒØ&ÔØ)-ˆŒ	Ü!Ÿ-š-›/ˆŒØˆŒØ&*ˆŒØ(,ˆÔØ(,ˆÔØ24ˆŒØ.0ˆŒÜ)0«ˆÔØˆó    c                ó¤  • U R                   U R                  U R                  U R                  U R                  U R
+                  R
+                  5        VVs0 s Hi  u  pUUR                  SU5      UR                  S5      U R                  U   [        U R                  R                  US5      5      U R                  :H  S._Mk     snnSS.$ s  snnf )NÚdisplay_namer$   © )rD   r$   Úticks_receivedÚ
+window_filledF)r7   r9   r:   r8   r2   r;   Útrading_enabled)r7   r9   r:   r8   r2   r;   ÚitemsÚgetr=   Úlenr<   )r?   ÚsymbolÚinfos      r)   ÚsnapshotÚ!DerivMarketDataCollector.snapshot@   sÅ   € à—k‘kØ ×-Ñ-Ø ×-Ñ-ØŸ/™/Ø×+Ñ+ð %)§L¡L×$6Ñ$6Ô$8ôò %9‘LFð
+ Ø$(§H¡H¨^¸VÓ$DØ $§¡¨Ó 4Ø&*×&6Ñ&6°vÑ&>Ü%(¨¯©×)9Ñ)9¸&À"Ó)EÓ%FÈ$×JZÑJZÑ%Zñ	ò ñ %9òð  %ñ
+ð 	
+ùós   ÁA0Cc              ƒ  ó0  #   • U R                   (       a/  U R                   R                  5       (       d  U R                  5       $ [        R                  " 5       U l        [        R                  " U R                  5       5      U l         U R                  5       $ 7f)N)r3   ÚdonerN   r4   r5   r6   Úcreate_taskÚ_run©r?   s    r)   ÚstartÚDerivMarketDataCollector.startS   sY   é € Ø99˜TŸY™YŸ^™^×-Ñ-Ø—=‘=“?Ð"Ü!Ÿ-š-›/ˆŒÜ×'Ò'¨¯	©	«Ó4ˆŒ	Ø}‰}‹Ðùs   ‚BBc              ƒ  ó$  #   • U R                   R                  5         U R                  (       a/  U R                  R                  5          U R                  I S h  v•N   SU l        U R                  5       $  N! [        R
+                   a     N/f = f7f)Nr/   )r6   Úsetr3   Úcancelr4   ÚCancelledErrorr7   rN   rT   s    r)   ÚstopÚDerivMarketDataCollector.stopZ   sm   é € Ø‰×ÑÔØ99ØI‰I×ÑÔð
+Ø—i‘i—ð  ˆŒØ}‰}‹Ðñ	  øÜ×)Ñ)ó 
+Ùð
+üs<   ‚ABÁ	A6 ÁA4ÁA6 ÁBÁ4A6 Á6B
+Â
+BÂB
+Â
+Bc              ƒ  óè  #   • SU l         S U l        U R                  R                  5       (       Gd®   [        R
+                  " [        SSSSS9 IS h  v•N nSU l         [        R                  " [        R                  5      R                  5       U l        UR                  [        R                  " SU R!                  5       S.5      5      I S h  v•N   U  S h  v•N nU R                  R                  5       (       a    O®[        R"                  " U5      nUR%                  S	5      (       a  US	   R%                  S
+S5      U l        Mr  UR%                  S5      nUS
+:X  a$  U R'                  UR%                  S
+/ 5      U5        M­  US:X  d  Mµ  U R)                  UR%                  S0 5      5        MØ  S S S 5      IS h  v•N   U R                  R                  5       (       d  GM®  SU l         g  GN• GN GN
+ NE N9! , IS h  v•N  (       d  f       NN= f! [*        R,                   a    e [.         aC  n[1        U5      S S U l        SU l         [*        R2                  " S5      I S h  v•N     S nAN­S nAff = f7f)NÚ
+connectingé   é   i   )Ú
+ping_intervalÚping_timeoutÚ
+close_timeoutÚmax_sizeÚ	connectedÚbrief)Úactive_symbolsÚreq_idÚerrorÚmessagezDeriv WebSocket errorÚmsg_typerg   Útickiô  Úreconnectingé   r/   )r7   r8   r6   Úis_setÚ
+websocketsÚconnectÚ
+PUBLIC_WS_URLr   Únowr   ÚutcÚ	isoformatr9   ÚsendÚjsonÚdumpsÚ_next_idÚloadsrJ   Ú_handle_symbolsÚ_handle_tickr4   rZ   Ú	Exceptionr   Úsleep)r?   ÚwsÚrawrj   rk   r&   s         r)   rS   ÚDerivMarketDataCollector._rune   sè  é € Ø"ˆŒØˆŒØ—/‘/×(Ñ(×*Ò*ð
+'Ü%×-Ò-Ü!°À"Ø"#¨e÷ò ð Ø"-D”KÜ(0¯ª´X·\±\Ó(B×(LÑ(LÓ(NDÔ%ØŸ'™'¤$§*¢*ÀÐSW×S`ÑS`ÓSbÑ-cÓ"dÓe×eÐeÙ%'÷ G˜cØŸ?™?×1Ñ1×3Ñ3Ù!Ü"&§*¢*¨S£/˜Ø"Ÿ;™; w×/Ñ/Ø.5°gÑ.>×.BÑ.BÀ9ÐNeÓ.f˜DœOÙ$Ø#*§;¡;¨zÓ#:˜Ø#Ð'7Ó7Ø ×0Ñ0°·±Ð=MÈrÓ1RÐTVÖWØ%¨Õ/Ø ×-Ñ-¨g¯k©k¸&À"Ó.EÖF÷%÷ ð —/‘/×(Ñ(×*Ô*ð6  ˆò3ò fòG¡R÷÷ ÷ ð ûô& ×)Ñ)ó 
+ØÜó 
+'Ü"% c£(¨4¨C .”Ø,”Ü—m’m AÓ&×&Ö&ûð
+'üsÒ   ‚/I2² H ÁG'ÁH ÁA8G4ÃG*ÃG4ÃG0ÃG-ÃG0ÃB)G4Æ
+#G4Æ-H Æ8G2Æ9H Æ=I2ÇI2Ç'H Ç*G4Ç-G0Ç0G4Ç2H Ç4HÇ:G=Ç;HÈH È
+I2ÈH ÈI/È,3I*ÉI"É I*É%I2É*I/É/I2c                óH   • U R                   nU =R                   S-
+  sl         U$ )Nr0   )r>   )r?   r%   s     r)   ry   Ú!DerivMarketDataCollector._next_id…   s   € Ø—‘ˆØŠ˜ÑØˆrB   c                ó²  • U HÑ  nUR                  S5      nU[        ;  a  M   UR                  S5      =(       d    UUR                  S5      S.U R                  U'   U R                  R	                  U[        U R                  S95        [        R                  " UR                  [        R                  " USU R                  5       S.5      5      5        MÓ     g )NrL   rD   Úpip)rD   r$   ©Úmaxlenr0   )ÚticksÚ	subscriberh   )
+rJ   ÚTARGET_SYMBOLSr;   r<   Ú
+setdefaultr   r2   r4   rR   rv   rw   rx   ry   )r?   Úrowsr   ÚrowrL   s        r)   r{   Ú(DerivMarketDataCollector._handle_symbolsŠ   s¨   € ÛˆCØ—W‘W˜XÓ&ˆFØœ^Ó+Ùà #§¡¨Ó 7× A¸6ØŸG™G E›Nñ$ˆDL‰L˜Ñ ð 
+L‰L×#Ñ# F¬E¸×9IÑ9IÑ,JÔKä×Ò §¡¬¯
+ª
+Ø¨a¸4¿=¹=»?ñ4ó )ó !ö 
+ò rB   c                óÒ  • UR                  S5      nX R                  ;  a  g UR                  S5      nUc  U R                  U   R                  S5      n [        UR                  S5      [        U5      5      nU R                  R                  U[        U R                  S95      nUR                  U5        U R                  U==   S-
+  ss'   [        R                  " [        R                  5      R!                  5       U l        [%        U5      U R                  :X  Ga.  ['        U5      n[)        S5       Vs0 s H%  nXvR                  US5      U R                  -  S-  _M'     nn[        R                  " [        R                  5      n	SS	KJn
+  U
+" UUU	S
+SU SUR                  S
+[        [.        R.                  " 5       5      5       3S9nU R0                  R3                  X¹S9  U R0                  R5                  X$[        R6                  " [        UR                  S
+[.        R.                  " 5       5      5      [        R                  S9U	S9  g g ! [        [
+        4 a     g f = fs  snf )NrL   r$   r#   r†   r0   r   r   g      Y@)ÚDerivDigitStatsÚderivz
+public-ws:Ú:Úepoch)ÚmarketÚpercentagesÚobserved_atÚsourceÚsource_reference)rs   )Útz)Ú	tick_timers   )rJ   r;   r*   r   r   r   r<   r‹   r   r2   Úappendr=   r   rs   r   rt   ru   r:   rK   r   ÚrangeÚsupa_ai_engine.enginer   Útimer1   Úupdate_statsÚon_tickÚ
+fromtimestamp)r?   rl   rL   r$   ÚdigitÚbufferÚcountsÚdr•   Úobservedr   Ústatss               r)   r|   Ú%DerivMarketDataCollector._handle_tick™   s  € Ø—‘˜(Ó#ˆØŸ™Ó%ØØ—8‘8˜JÓ'ˆØÑØ—|‘| FÑ+×/Ñ/°
+Ó;ˆHð	Ü(¨¯©°'Ó):¼CÀ»MÓJˆEð —‘×(Ñ(¨´¸d×>NÑ>NÑ1OÓPˆØ
+‰
+eÔØ×Ñ˜Ó  AÑ%Ó Ü$ŸLšL¬¯©Ó6×@Ñ@ÓBˆÔô ˆv‹;˜$×*Ñ*Ô*Ü˜V“_ˆFô ˜rœóâ"Að —J‘J˜q !Ó$ t×'7Ñ'7Ñ7¸5Ñ@Ò@Ù"ð 
+ð ô  —|’|¤H§L¡LÓ1ˆHÝ=Ù#ØØ'Ø$ØØ#-¨f¨X°Q°t·x±xÀÌÌTÏYÊYË[ÓIYÓ7ZÐ6[Ð!\ñˆEð 
+K‰K×$Ñ$ UÐ$Ñ9ØK‰K×ÑØÜ"×0Ò0Ü˜Ÿ™ ¬$¯)ª)«+Ó6Ó7¼H¿L¹Lñð ð 
+ ò 
+ð# +øô œIÐ&ó 	Ùð	üòs   Á$I Ä7,I$ÉI!É I!)r>   r<   r9   r1   r8   r:   r7   r6   r;   r3   r=   r2   N)éd   )r2   r   )ÚreturnÚdict)Ú__name__Ú
+__module__Ú__qualname__Ú__firstlineno__Ú__doc__r@   rN   rU   r[   rS   ry   r{   r|   Ú__static_attributes__rE   rB   r)   r,   r,   -   s.   † ÙIöô 
+ò&ò	ò ò@ò
+
+õ)rB   r,   )r#   r
+   r$   r   rª   r   )r°   Ú
+__future__r   r4   rw   r!   rž   Úcollectionsr   r   r   r   Údecimalr   r	   Útypingr
+   rp   rr   rŠ   r*   r,   rE   rB   r)   Ú<module>r¶      sG   ðñõ
+ #ã Û Û 	Û ß &ß 'ß -Ý ã àD€
+ò€ô÷"Uò UrB   
