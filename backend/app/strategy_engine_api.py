@@ -6,8 +6,11 @@ for analysis only. Live execution remains locked.
 """
 
 from datetime import datetime, timezone
+from dataclasses import replace
+from decimal import Decimal
+from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from supa_ai_engine.engine import (
     DerivDigitStats,
@@ -19,6 +22,7 @@ from supa_ai_engine.engine import (
 # In-memory instance for development only.
 # Persistent background operation requires a separate worker and storage.
 engine = StrategyEngine(StrategyConfig())
+_strategy_drafts: dict[str, dict] = {}
 
 
 class EngineStatusResponse(BaseModel):
@@ -34,6 +38,30 @@ class MarketStatsRequest(BaseModel):
     observed_at: datetime
     source: str
     source_reference: str = Field(min_length=1, max_length=500)
+
+
+class StrategyDraftRequest(BaseModel):
+    """Explicit, reviewable strategy rules; no free-form guessing occurs here."""
+    name: str = Field(min_length=1, max_length=80)
+    contract_type: str = Field(pattern="^(ODD|EVEN)$")
+    initial_stake: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+    even_digit_max_pct: Decimal = Field(gt=0, le=100)
+    odd_digit_min_pct: Decimal = Field(gt=0, le=100)
+    min_qualifying_odd_digits: int = Field(ge=1, le=5)
+    trigger_window_ticks: int = Field(ge=2, le=100)
+    martingale_enabled: bool = True
+    martingale_multiplier: Decimal = Field(gt=1, le=100)
+    session_stop_loss: Decimal = Field(gt=0)
+    session_take_profit: Decimal = Field(gt=0)
+    max_open_trades: int = Field(ge=1, le=10)
+
+    @model_validator(mode="after")
+    def validate_supported_rules(self):
+        if self.contract_type != "ODD":
+            raise ValueError("The current strategy engine supports ODD contracts only; EVEN strategies are not yet implemented")
+        if self.even_digit_max_pct >= self.odd_digit_min_pct:
+            raise ValueError("The even-digit maximum must be lower than the odd-digit minimum")
+        return self
 
 
 def get_engine_status() -> dict:
@@ -107,3 +135,60 @@ def validate_market_stats(request: MarketStatsRequest) -> dict:
             "not been independently authenticated. No trade was placed."
         ),
     }
+
+
+def create_strategy_draft(request: StrategyDraftRequest) -> dict:
+    """Store a validated draft for user review; does not alter active strategy."""
+    config = StrategyConfig(
+        initial_stake=request.initial_stake,
+        contract_type=request.contract_type,
+        even_digit_max_pct=request.even_digit_max_pct,
+        odd_digit_min_pct=request.odd_digit_min_pct,
+        min_qualifying_odd_digits=request.min_qualifying_odd_digits,
+        trigger_window_ticks=request.trigger_window_ticks,
+        martingale_enabled=request.martingale_enabled,
+        martingale_multiplier=request.martingale_multiplier,
+        session_stop_loss=request.session_stop_loss,
+        session_take_profit=request.session_take_profit,
+        max_open_trades=request.max_open_trades,
+    )
+    draft_id = str(uuid4())
+    payload = {
+        "id": draft_id, "name": request.name, "status": "AWAITING_REVIEW",
+        "rules": {
+            "contract_type": config.contract_type,
+            "initial_stake": str(config.initial_stake),
+            "even_digit_max_pct": str(config.even_digit_max_pct),
+            "odd_digit_min_pct": str(config.odd_digit_min_pct),
+            "min_qualifying_odd_digits": config.min_qualifying_odd_digits,
+            "trigger_window_ticks": config.trigger_window_ticks,
+            "martingale_enabled": config.martingale_enabled,
+            "martingale_multiplier": str(config.martingale_multiplier),
+            "session_stop_loss": str(config.session_stop_loss),
+            "session_take_profit": str(config.session_take_profit),
+            "max_open_trades": config.max_open_trades,
+        },
+        "execution_enabled": False,
+    }
+    _strategy_drafts[draft_id] = {"payload": payload, "config": config}
+    return payload
+
+
+def approve_strategy_draft(draft_id: str) -> dict:
+    """Apply a reviewed strategy configuration to analysis only."""
+    draft = _strategy_drafts.get(draft_id)
+    if draft is None:
+        raise ValueError("Strategy draft not found")
+    engine.config = draft["config"]
+    # Strategy changes invalidate partial digit sequences, but do not erase
+    # confirmed-loss progression or session P/L.
+    for state in engine.markets.values():
+        engine._reset_trigger(state)
+        state.qualifies = False
+        state.reason = "Waiting for fresh market statistics under the approved strategy"
+    engine.active_market = None
+    payload = dict(draft["payload"])
+    payload["status"] = "APPROVED_MONITORING_ONLY"
+    payload["execution_enabled"] = False
+    payload["martingale_step_preserved"] = engine.martingale_step
+    return payload

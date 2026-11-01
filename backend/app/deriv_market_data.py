@@ -107,19 +107,30 @@ class DerivMarketDataCollector:
                     PUBLIC_WS_URL, ping_interval=20, ping_timeout=20,
                     close_timeout=5, max_size=2**20
                 ) as ws:
+                    # A reconnect creates a gap in the sample stream. Clear partial
+                    # windows so no strategy is evaluated on discontinuous ticks.
+                    for buffer in self.buffers.values():
+                        buffer.clear()
                     self.status = "connected"
                     self.connected_at = datetime.now(timezone.utc).isoformat()
                     await ws.send(json.dumps({"active_symbols": "brief", "req_id": self._next_id()}))
                     async for raw in ws:
                         if self.stop_event.is_set():
                             break
-                        message = json.loads(raw)
+                        try:
+                            message = json.loads(raw)
+                        except (TypeError, json.JSONDecodeError):
+                            self.last_error = "Ignored malformed WebSocket message"
+                            continue
+                        if not isinstance(message, dict):
+                            self.last_error = "Ignored non-object WebSocket message"
+                            continue
                         if message.get("error"):
                             self.last_error = message["error"].get("message", "Deriv WebSocket error")
                             continue
                         msg_type = message.get("msg_type")
                         if msg_type == "active_symbols":
-                            self._handle_symbols(message.get("active_symbols", []), ws)
+                            await self._handle_symbols(message.get("active_symbols", []), ws)
                         elif msg_type == "tick":
                             self._handle_tick(message.get("tick", {}))
             except asyncio.CancelledError:
@@ -135,30 +146,43 @@ class DerivMarketDataCollector:
         self._req_id += 1
         return value
 
-    def _handle_symbols(self, rows, ws):
+    async def _handle_symbols(self, rows, ws):
+        if not isinstance(rows, list):
+            self.last_error = "Ignored malformed active_symbols response"
+            return
         for row in rows:
+            if not isinstance(row, dict):
+                continue
             symbol = row.get("symbol")
             if symbol not in TARGET_SYMBOLS:
                 continue
+            pip_size = row.get("pip")
+            if isinstance(pip_size, bool) or not isinstance(pip_size, int) or not 0 <= pip_size <= 10:
+                self.last_error = f"Ignored {symbol}: invalid pip precision metadata"
+                continue
             self.symbols[symbol] = {
                 "display_name": row.get("display_name") or symbol,
-                "pip_size": row.get("pip"),
+                "pip_size": pip_size,
             }
             self.buffers.setdefault(symbol, deque(maxlen=self.window_size))
             # Deriv public market-data subscription only.
-            asyncio.create_task(ws.send(json.dumps({
+            await ws.send(json.dumps({
                 "ticks": symbol, "subscribe": 1, "req_id": self._next_id()
-            })))
+            }))
 
     def _handle_tick(self, tick):
+        if not isinstance(tick, dict):
+            return
         symbol = tick.get("symbol")
         if symbol not in self.symbols:
             return
         pip_size = tick.get("pip_size")
         if pip_size is None:
             pip_size = self.symbols[symbol].get("pip_size")
+        if isinstance(pip_size, bool) or not isinstance(pip_size, int):
+            return
         try:
-            digit = last_digit_from_tick(tick.get("quote"), int(pip_size))
+            digit = last_digit_from_tick(tick.get("quote"), pip_size)
         except (ValueError, TypeError):
             return
 
@@ -185,6 +209,9 @@ class DerivMarketDataCollector:
             )
             # This is market analysis only. No execution adapter exists.
             self.engine.update_stats(stats, now=observed)
+            # Re-evaluate the active market after every complete fresh window.
+            # Only the selected market may advance its entry-trigger sequence.
+            self.engine.select_active_market(now=observed)
             self.engine.on_tick(
                 symbol, digit,
                 tick_time=datetime.fromtimestamp(

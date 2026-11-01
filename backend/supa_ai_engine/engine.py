@@ -13,7 +13,7 @@ def money(value):
 
 @dataclass(frozen=True)
 class StrategyConfig:
-    initial_stake: Decimal = Decimal("0.50")
+    initial_stake: Decimal = Decimal("0.35")
     contract_type: str = "ODD"
     even_digit_max_pct: Decimal = Decimal("10.0")
     odd_digit_min_pct: Decimal = Decimal("10.5")
@@ -85,6 +85,8 @@ class StrategyEngine:
     def __init__(self, config: StrategyConfig | None = None):
         self.config = config or StrategyConfig()
         self.markets: Dict[str, MarketState] = {}
+        self.active_market: Optional[str] = None
+        self.market_switch_count = 0
         self.offline_trading_enabled = False
         self.live_trading_enabled = False
         self.session_pnl = Decimal("0")
@@ -114,6 +116,22 @@ class StrategyEngine:
         if observed_at.tzinfo is None: raise ValueError("Balance timestamp must be timezone-aware")
         self.available_balance, self.balance_currency = amount, currency
         self.balance_observed_at, self.balance_source_reference = observed_at, source_reference
+
+    def restore_persistent_state(self, *, martingale_step, session_pnl, open_contract_ids):
+        """Restore only durable broker/runtime fields; execution remains disabled."""
+        if not isinstance(martingale_step, int) or isinstance(martingale_step, bool) or martingale_step < 0:
+            raise ValueError("Persisted Martingale step is invalid")
+        if not isinstance(open_contract_ids, (list, tuple)) or any(not isinstance(x, str) or not x.strip() for x in open_contract_ids):
+            raise ValueError("Persisted open contract identifiers are invalid")
+        if len(set(open_contract_ids)) != len(open_contract_ids):
+            raise ValueError("Persisted open contract identifiers contain duplicates")
+        pnl = money(session_pnl)
+        self.martingale_step = martingale_step
+        self.session_pnl = pnl
+        self.open_contract_ids = set(open_contract_ids)
+        # Settled IDs are kept in Supabase; local idempotency only covers this process.
+        self.live_trading_enabled = False
+        self.offline_trading_enabled = False
 
     def add_open_contract(self, contract_id):
         if not contract_id.strip(): raise ValueError("contract_id is required")
@@ -159,10 +177,15 @@ class StrategyEngine:
         now = now or datetime.now(timezone.utc)
         state = self.markets.setdefault(stats.market, MarketState(stats.market))
         age = (now - stats.observed_at.astimezone(timezone.utc)).total_seconds()
+        was_qualifying = state.qualifies
+        previous_trigger = state.trigger_digit
         state.last_stats_at, state.qualifies = stats.observed_at, False
-        self._reset_trigger(state)
-        if age < -1: state.reason = "Rejected: Deriv stats timestamp is in the future"
-        elif age > self.config.stats_max_age_seconds: state.reason = "Waiting: Deriv percentages are stale"
+        if age < -1:
+            self._reset_trigger(state)
+            state.reason = "Rejected: Deriv stats timestamp is in the future"
+        elif age > self.config.stats_max_age_seconds:
+            self._reset_trigger(state)
+            state.reason = "Waiting: Deriv percentages are stale"
         else:
             evens, odds = (0, 2, 4, 6, 8), (1, 3, 5, 7, 9)
             least_pct = min(stats.percentages[d] for d in evens)
@@ -171,17 +194,60 @@ class StrategyEngine:
             all_below = all(stats.percentages[d] < float(self.config.even_digit_max_pct) for d in evens)
             state.least_even_digits = least
             state.qualifies = all_below and enough
+            if not state.qualifies:
+                self._reset_trigger(state)
+            elif was_qualifying and previous_trigger is not None and previous_trigger not in least:
+                self._reset_trigger(state)
             state.reason = ("Qualifies using fresh Deriv-supplied percentages; waiting for entry sequence"
                             if state.qualifies else "Does not qualify: " + "; ".join(
                                 msg for msg, failed in (("not every even digit is below threshold", not all_below),
                                                         ("too few odd digits meet the minimum frequency", not enough)) if failed))
         return MarketDecision(stats.market, state.qualifies, False, False, state.reason, state.least_even_digits)
 
+    def select_active_market(self, *, now=None):
+        """Keep the active market while it qualifies; otherwise select another fresh eligible market.
+
+        Martingale progression is engine-wide and is intentionally not reset on a market
+        switch. A partial digit trigger is market-specific and is reset when leaving a
+        market so ticks from different symbols are never combined into one sequence.
+        """
+        now = now or datetime.now(timezone.utc)
+
+        def is_eligible(state):
+            if not state.qualifies or state.last_stats_at is None:
+                return False
+            age = (now - state.last_stats_at.astimezone(timezone.utc)).total_seconds()
+            return -1 <= age <= self.config.stats_max_age_seconds
+
+        current = self.markets.get(self.active_market) if self.active_market else None
+        if current is not None and is_eligible(current):
+            return self.active_market
+
+        previous = self.active_market
+        if current is not None:
+            self._reset_trigger(current)
+
+        candidates = sorted(
+            (name for name, state in self.markets.items() if is_eligible(state))
+        )
+        self.active_market = candidates[0] if candidates else None
+
+        if previous != self.active_market:
+            self.market_switch_count += 1
+            if self.active_market is not None:
+                self._reset_trigger(self.markets[self.active_market])
+        return self.active_market
+
     def on_tick(self, market, digit, tick_time=None, *, now=None):
         if digit not in range(10): raise ValueError("digit must be between 0 and 9")
         tick_time, now = tick_time or datetime.now(timezone.utc), now or datetime.now(timezone.utc)
         state = self.markets.setdefault(market, MarketState(market))
         state.last_tick_at, state.entry_confirmed = tick_time, False
+        selected = self.select_active_market(now=now)
+        if selected is not None and market != selected:
+            return MarketDecision(market, state.qualifies, False, False,
+                                  f"Monitoring only; active trading-analysis market is {selected}",
+                                  state.least_even_digits)
         if not state.qualifies:
             return MarketDecision(market, False, False, False, "New entries paused: market does not qualify", state.least_even_digits)
         if state.last_stats_at is None:
