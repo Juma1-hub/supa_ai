@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { getSupabaseBrowserClient } from "@/lib/supabase";
 
 export default function DerivCallbackPage() {
   const [message, setMessage] = useState("Verifying your Deriv sign-in…");
@@ -9,6 +10,9 @@ export default function DerivCallbackPage() {
     let cancelled = false;
     async function complete() {
       try {
+        const supabase = getSupabaseBrowserClient();
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError || !session) throw new Error("Your Supa AI session is missing or expired. Sign in to Supa AI before connecting Deriv.");
         const params = new URLSearchParams(window.location.search);
         const oauthError = params.get("error");
         if (oauthError) throw new Error(params.get("error_description") || "Deriv sign-in was cancelled or denied.");

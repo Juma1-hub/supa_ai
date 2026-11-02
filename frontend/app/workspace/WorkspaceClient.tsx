@@ -45,7 +45,7 @@ const initialStrategy: Strategy = {
   qualifyingDigits: 3,
   sequenceLength: 2,
   sequenceWindow: 5,
-  stake: 1,
+  stake: 0.35,
   martingaleMultiplier: 2,
   maxMartingaleSteps: 3,
   takeProfit: 10,
@@ -194,6 +194,10 @@ export default function Home({ previewMode = false }: { previewMode?: boolean })
   }, [virtualHook, offlineEnabled, botRunning, offlineContracts, communitySharing, controlsHydrated]);
 
 useEffect(() => {
+  let authCheckCancelled = false;
+  import("@/lib/supabase").then(({ getSupabaseBrowserClient }) => getSupabaseBrowserClient().auth.getSession()).then(({ data, error }) => {
+    if (!authCheckCancelled && (error || !data.session)) window.location.replace("/");
+  }).catch(() => { if (!authCheckCancelled) window.location.replace("/"); });
   setStrategies(readSavedStrategies());
 
   let cancelled = false;
@@ -201,7 +205,7 @@ useEffect(() => {
 
   const loadSelectedAccount = () => {
     try {
-      const savedAccount = sessionStorage.getItem(
+      const savedAccount = localStorage.getItem(
         "supa_deriv_selected_account"
       );
 
@@ -241,7 +245,7 @@ useEffect(() => {
 
       if (!Array.isArray(data.accounts) || cancelled) return;
 
-      const savedAccount = sessionStorage.getItem(
+      const savedAccount = localStorage.getItem(
         "supa_deriv_selected_account"
       );
 
@@ -258,7 +262,7 @@ useEffect(() => {
 
       setSelectedAccount(latestAccount);
 
-      sessionStorage.setItem(
+      localStorage.setItem(
         "supa_deriv_selected_account",
         JSON.stringify(latestAccount)
       );
@@ -277,6 +281,7 @@ useEffect(() => {
   }, 15000);
 
   return () => {
+    authCheckCancelled = true;
     cancelled = true;
     window.clearInterval(intervalId);
   };
@@ -816,9 +821,9 @@ useEffect(() => {
               <div className="builder-main panel">
                 <div className="step-header"><span className="step-number">01</span><div><h2>Tell Supa AI what to do</h2><p>Be specific about market, contract, entry condition, stake, and when to stop.</p></div></div>
                 <label className="field-label" htmlFor="supa-ai-instructions">TRADER INSTRUCTIONS</label>
-                <textarea id="supa-ai-instructions" className="instruction-input large" value={aiInstructionText} onChange={e=>setAiInstructionText(e.target.value)} placeholder="Example: Trade Volatility 10 Index, use a stake of $0.50, analyze the last 1,000 ticks, enter an ODD contract only after [precise condition], never increase stake after a loss, and stop after 3 consecutive losses." />
+                <textarea id="supa-ai-instructions" className="instruction-input large" value={aiInstructionText} onChange={e=>setAiInstructionText(e.target.value)} placeholder="Example: Trade Volatility 10 Index, use a stake of $0.35, analyze the last 1,000 ticks, enter an ODD contract only after [precise condition], never increase stake after a loss, and stop after 3 consecutive losses." />
                 <div className="helper-box"><span>✦</span><p><b>How this version works:</b> This is a transparent pattern-based interpreter, not a connected general-purpose AI model. It extracts only supported details and flags anything it cannot reliably understand.</p></div>
-                <div className="quick-actions"><button className="secondary-button" onClick={()=>setAiInstructionText("Trade Volatility 10 Index. Use a stake of $0.50. Analyze the last 1,000 ticks. Enter an ODD contract only when my exact entry condition is met: [describe the condition]. Never increase the stake after a loss (no martingale). Stop after 3 consecutive losses.")}>Use example template</button><button className="primary-button" onClick={interpretTraderInstructions}>Interpret instructions →</button></div>
+                <div className="quick-actions"><button className="secondary-button" onClick={()=>setAiInstructionText("Trade Volatility 10 Index. Use a stake of $0.35. Analyze the last 1,000 ticks. Enter an ODD contract only when my exact entry condition is met: [describe the condition]. Never increase the stake after a loss (no martingale). Stop after 3 consecutive losses.")}>Use example template</button><button className="primary-button" onClick={interpretTraderInstructions}>Interpret instructions →</button></div>
                 {aiInterpretation && <div className="panel" style={{padding:16,marginTop:20}}>
                   <div className="panel-heading"><div><h2>Interpreted strategy</h2><p>Check every field before using this draft.</p></div><span className={`draft-pill ${aiInterpretation.ready?"":""}`}>{aiInterpretation.ready?"REVIEWABLE":"NEEDS CLARIFICATION"}</span></div>
                   <div className="form-grid"><label>Market<input readOnly value={aiInterpretation.market}/></label><label>Contract<input readOnly value={aiInterpretation.contract}/></label><label>Stake<input readOnly value={aiInterpretation.stake===null?"Not found":String(aiInterpretation.stake)}/></label><label>Tick window<input readOnly value={`${aiInterpretation.window} ticks`}/></label><label>Martingale<input readOnly value={aiInterpretation.martingale===null?"Not specified":aiInterpretation.martingale?"Requested ON":"OFF"}/></label><label>Stop after losses<input readOnly value={aiInterpretation.maxLossStreak===null?"Not specified":`${aiInterpretation.maxLossStreak} consecutive losses`}/></label></div>

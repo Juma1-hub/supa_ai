@@ -53,7 +53,7 @@ export const DEFAULT_CONFIG: StrategyConfig = {
   sequenceWindow: 5,
   consecutiveOddCount: 2,
   contract: "ODD",
-  stake: 0.5,
+  stake: 0.35,
   maxStake: 10,
   stopLoss: 5,
   takeProfit: 5,

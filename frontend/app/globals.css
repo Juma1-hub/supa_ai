@@ -281,3 +281,9 @@ body {
 .preview-access-banner {
   margin-bottom: 18px;
 }
+
+/* Stage 21 Supabase sign-in fields */
+.auth-field-label{display:block;margin:14px 0 7px;color:rgba(225,235,255,.72);font-size:10px;font-weight:700;letter-spacing:.14em}
+.auth-input{display:block;width:100%;box-sizing:border-box;padding:13px 15px;border:1px solid rgba(255,255,255,.14);border-radius:12px;background:rgba(8,15,32,.58);color:#fff;font:inherit;outline:none}
+.auth-input:focus{border-color:rgba(116,164,255,.8);box-shadow:0 0 0 3px rgba(88,135,255,.12)}
+.auth-input::placeholder{color:rgba(225,235,255,.38)}
